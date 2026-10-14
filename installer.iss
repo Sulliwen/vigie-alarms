@@ -7,7 +7,8 @@
 #define AppExe "Vigie.exe"
 
 [Setup]
-AppId={{6F0B8C2E-4D1A-4B7E-9C35-CA1E0DA7A1A2}
+; Its own identity: Vigie installs beside Calendar Alarm instead of replacing it.
+AppId={{65A18FC8-FB9F-4411-BA1A-F81A288DA8DD}
 AppName={#AppName}
 AppVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}
@@ -39,8 +40,6 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 [Registry]
 ; The program registers itself at logon; the installer only cleans that entry up.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Vigie"; Flags: dontcreatekey uninsdeletevalue
-; Entry left by the builds made under the former name, Calendar Alarm.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "CalendarAlarm"; Flags: dontcreatekey deletevalue
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

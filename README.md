@@ -2,6 +2,9 @@
 
 *[English version](README.en.md)*
 
+Vigie reprend [Calendar Alarm](https://github.com/Sulliwen/calendar-alarm),
+qui reste disponible seul, et y ajoutera les alertes Slack.
+
 Petit programme Windows qui tourne en arrière-plan et sonne **10 minutes avant
 chaque rendez-vous** de vos agendas (Infomaniak, Google, Outlook, iCloud…), que
 le rendez-vous porte un rappel ou non et quel que soit son créateur. Une

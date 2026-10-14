@@ -2,6 +2,9 @@
 
 *[Version française](README.md)*
 
+Vigie builds on [Calendar Alarm](https://github.com/Sulliwen/calendar-alarm),
+which remains available on its own, and will add Slack alerts to it.
+
 A small Windows program that runs in the background and rings **10 minutes
 before every appointment** of your calendars (Infomaniak, Google, Outlook,
 iCloud…), whether or not the appointment carries a reminder and whoever created

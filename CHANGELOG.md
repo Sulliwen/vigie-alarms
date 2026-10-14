@@ -13,7 +13,8 @@ Il est repris par l'installeur et affiché en bas de la fenêtre « Paramètres 
 
 ## 1.0.0 — 2026-10-13
 
-Première version diffusée.
+Première version de Vigie, reprise de Calendar Alarm 1.0.0 sous son propre nom.
+Vigie s'installe à côté de Calendar Alarm sans le remplacer.
 
 - Alarme avant chaque rendez-vous, avec ou sans rappel, quel que soit son
   créateur : fenêtre au premier plan, sonnerie en boucle, « Arrêter » ou
