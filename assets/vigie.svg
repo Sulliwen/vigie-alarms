@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Vigie</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8f0fe"/>
+      <stop offset="1" stop-color="#bcd3fb"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a3d2b"/>
+      <stop offset="1" stop-color="#3a271c"/>
+    </linearGradient>
+    <clipPath id="disc"><circle cx="256" cy="256" r="248"/></clipPath>
+  </defs>
+
+  <circle cx="256" cy="256" r="252" fill="#ffffff"/>
+  <g clip-path="url(#disc)">
+    <rect width="512" height="512" fill="url(#sky)"/>
+
+    <!-- hair, behind the head -->
+    <path d="M256 92 C168 92 130 160 134 238 C138 304 124 352 146 400 L366 400 C388 352 374 304 378 238 C382 160 344 92 256 92 Z" fill="url(#hair)"/>
+
+    <!-- neck -->
+    <path d="M226 296 L226 356 Q256 378 286 356 L286 296 Z" fill="#e8ad88"/>
+
+    <!-- blazer and blouse -->
+    <path d="M86 512 C92 424 156 384 224 368 L256 404 L288 368 C356 384 420 424 426 512 Z" fill="#1f3a5f"/>
+    <path d="M224 368 L256 438 L288 368 L274 362 L256 396 L238 362 Z" fill="#ffffff"/>
+    <path d="M224 368 L206 380 L238 452 L256 438 Z" fill="#17304f"/>
+    <path d="M288 368 L306 380 L274 452 L256 438 Z" fill="#17304f"/>
+    <!-- the app badge on the lapel -->
+    <rect x="322" y="430" width="38" height="38" rx="8" fill="#2e7d32"/>
+    <rect x="327" y="444" width="28" height="19" rx="3" fill="#ffffff"/>
+    <circle cx="341" cy="453.5" r="5.5" fill="#2e7d32"/>
+
+    <!-- ears -->
+    <ellipse cx="183" cy="230" rx="11" ry="19" fill="#efb995"/>
+    <ellipse cx="329" cy="230" rx="11" ry="19" fill="#efb995"/>
+
+    <!-- face -->
+    <path d="M184 212 C184 152 216 128 256 128 C296 128 328 152 328 212 C328 272 298 318 256 318 C214 318 184 272 184 212 Z" fill="#f6caa6"/>
+    <ellipse cx="214" cy="262" rx="15" ry="8" fill="#f08f8f" opacity="0.32"/>
+    <ellipse cx="298" cy="262" rx="15" ry="8" fill="#f08f8f" opacity="0.32"/>
+
+    <!-- eyebrows -->
+    <path d="M208 196 Q227 184 246 193" fill="none" stroke="#3a271c" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M266 193 Q285 184 304 196" fill="none" stroke="#3a271c" stroke-width="4.5" stroke-linecap="round"/>
+
+    <!-- eyes -->
+    <path d="M208 221 Q228 204 248 220 Q228 235 208 221 Z" fill="#ffffff"/>
+    <circle cx="228" cy="220" r="8.5" fill="#6b4430"/>
+    <circle cx="228" cy="220" r="3.6" fill="#1d1410"/>
+    <circle cx="230.5" cy="217" r="2" fill="#ffffff"/>
+    <path d="M248 219 Q228 202 207 221 L201 215" fill="none" stroke="#2b1d16" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M264 220 Q284 204 304 221 Q284 235 264 220 Z" fill="#ffffff"/>
+    <circle cx="284" cy="220" r="8.5" fill="#6b4430"/>
+    <circle cx="284" cy="220" r="3.6" fill="#1d1410"/>
+    <circle cx="286.5" cy="217" r="2" fill="#ffffff"/>
+    <path d="M264 219 Q284 202 305 221 L311 215" fill="none" stroke="#2b1d16" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- nose and smile -->
+    <path d="M258 238 Q255 253 251 258 Q256 262 261 258" fill="none" stroke="#dca183" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M227 279 Q256 311 285 279 Q256 291 227 279 Z" fill="#c9485b"/>
+    <path d="M235 283 Q256 293 277 283" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.6"/>
+
+    <!-- hair, in front: side-swept fringe and strands -->
+    <path d="M180 214 C174 148 214 110 262 112 C314 114 342 156 334 214 C322 176 298 154 262 148 C238 170 208 186 180 214 Z" fill="url(#hair)"/>
+    <path d="M182 196 C168 250 172 322 158 380 L190 380 C198 322 192 262 198 214 Z" fill="url(#hair)"/>
+    <path d="M330 196 C344 250 340 322 354 380 L322 380 C314 322 320 262 314 214 Z" fill="url(#hair)"/>
+
+    <!-- headset -->
+    <path d="M178 232 C168 92 344 92 334 232" fill="none" stroke="#263238" stroke-width="7" stroke-linecap="round"/>
+    <rect x="166" y="210" width="22" height="42" rx="9" fill="#263238"/>
+    <rect x="324" y="210" width="22" height="42" rx="9" fill="#263238"/>
+    <path d="M178 252 Q186 300 230 304" fill="none" stroke="#263238" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="233" cy="304" r="6" fill="#263238"/>
+  </g>
+</svg>
