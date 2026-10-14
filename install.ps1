@@ -8,5 +8,5 @@ if (-not (Test-Path $pythonw)) {
 }
 & (Join-Path $dir '.venv\Scripts\python.exe') -m pip install --quiet --disable-pip-version-check -r (Join-Path $dir 'requirements.txt')
 
-Start-Process -FilePath $pythonw -ArgumentList ('"{0}"' -f (Join-Path $dir 'calendar_alarm.py')) -WorkingDirectory $dir
-Write-Host 'Calendar Alarm installed and started.'
+Start-Process -FilePath $pythonw -ArgumentList ('"{0}"' -f (Join-Path $dir 'vigie.py')) -WorkingDirectory $dir
+Write-Host 'Vigie installed and started.'

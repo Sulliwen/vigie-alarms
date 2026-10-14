@@ -1,4 +1,4 @@
-"""Calendar alarm: rings before every event of your calendars.
+"""Vigie: rings before every appointment of your calendars.
 
 Runs in the background with a tray icon. Every event gets an alarm, whether
 or not it carries a reminder and whoever created it. Calendars are read from
@@ -50,11 +50,11 @@ from texts import PROVIDERS, t
 # cannot keep the user's settings. The installer and the settings window read it from here.
 __version__ = "1.0.0"
 
-APP = "calendar-alarm"
+APP = "vigie"
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
-LOG_PATH = DATA_DIR / "calendar-alarm.log"
+LOG_PATH = DATA_DIR / "vigie.log"
 
 INFOMANIAK_URL = "https://sync.infomaniak.com"
 DEFAULT_CONFIG = {
@@ -88,7 +88,7 @@ TICK_MS = 500
 REDISCOVER_SECONDS = 1800
 TEST_PREFIX = "test:"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-RUN_NAME = "CalendarAlarm"
+RUN_NAME = "Vigie"
 COLOR_OK = "#2e7d32"
 COLOR_ERROR = "#c62828"
 FONT = "Segoe UI"
@@ -172,25 +172,7 @@ def delete_secret(account):
 
 
 def load_config():
-    stored = load_json(CONFIG_PATH, {})
-    if "username" in stored:
-        # Builds made before the first release knew a single Infomaniak account, kept at the top level.
-        username = stored.pop("username")
-        account = {
-            "id": uuid.uuid4().hex[:8],
-            "type": "caldav",
-            "url": stored.pop("url", INFOMANIAK_URL),
-            "username": username,
-            "calendars": stored.pop("calendars", None),
-        }
-        password = keyring.get_password(APP, username)
-        if password:
-            set_secret(account, password)
-            keyring.delete_password(APP, username)
-        stored["accounts"] = [account]
-        save_json(CONFIG_PATH, stored)
-        log.info("configuration migrated to the multi-account format")
-    return {**copy.deepcopy(DEFAULT_CONFIG), **stored}
+    return {**copy.deepcopy(DEFAULT_CONFIG), **load_json(CONFIG_PATH, {})}
 
 
 def provider_of(account):
@@ -508,7 +490,7 @@ class Dialog(tk.Toplevel):
         super().__init__(app.root)
         self.app = app
         self.name = name
-        self.title(f"Calendar Alarm — {title}")
+        self.title(f"Vigie — {title}")
         self.configure(bg="white")
         self.resizable(False, False)
         self.attributes("-topmost", True)
@@ -727,7 +709,7 @@ class AccountsDialog(Dialog):
                 button(row, text, command, "link").pack(side="right", padx=(4, 0))
 
     def remove(self, account):
-        if messagebox.askyesno("Calendar Alarm", t("remove_question", name=account_label(account)), parent=self):
+        if messagebox.askyesno("Vigie", t("remove_question", name=account_label(account)), parent=self):
             self.app.remove_account(account)
 
 
@@ -770,7 +752,7 @@ class SettingsDialog(Dialog):
         self.poll = self.choice(t("poll_label"), polls, polls[poll])
         self.autostart = self.checkbox(t("autostart"), autostart_command() is not None)
 
-        self.label(self.footer, f"Calendar Alarm {__version__}", font=(FONT, 9), fg=COLOR_MUTED).pack(side="left")
+        self.label(self.footer, f"Vigie {__version__}", font=(FONT, 9), fg=COLOR_MUTED).pack(side="left")
         button(self.footer, t("cancel"), self.close).pack(side="right")
         button(self.footer, t("save"), self.submit, "primary").pack(side="right", padx=(0, 8))
 
@@ -931,7 +913,7 @@ class AgendaWindow(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app.root)
         self.app = app
-        self.title(f"Calendar Alarm — {t('agenda_title')}")
+        self.title(f"Vigie — {t('agenda_title')}")
         self.configure(bg="white")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.bind("<Escape>", lambda _: self.close())
@@ -1114,7 +1096,7 @@ class App:
         # Kept on self: Tk only holds a weak reference to the picture of its windows.
         self.window_icon = ImageTk.PhotoImage(self.icons[True].resize((64, 64)))
         self.root.iconphoto(True, self.window_icon)
-        self.tray = pystray.Icon(APP, self.icons[False], "Calendar Alarm", self.build_menu())
+        self.tray = pystray.Icon(APP, self.icons[False], "Vigie", self.build_menu())
         self.fetcher = Fetcher(self)
 
     # --- plumbing -------------------------------------------------------
@@ -1488,7 +1470,7 @@ class App:
         return t("next_event", time=f"{first.start:%H:%M}", title=first.summary)[:80]
 
     def refresh_tray(self):
-        self.tray.title = f"Calendar Alarm — {self.status_text()}"[:120]
+        self.tray.title = f"Vigie — {self.status_text()}"[:120]
         self.tray.update_menu()
 
     def refresh_health(self):
@@ -1502,7 +1484,7 @@ class App:
         if overdue and not self.warned:
             names = ", ".join(account_label(account) for account in overdue)
             log.warning("no successful sync recently: %s", names)
-            self.tray.notify(t("stale_notification", names=names)[:250], "Calendar Alarm")
+            self.tray.notify(t("stale_notification", names=names)[:250], "Vigie")
         self.warned = bool(overdue)
 
 

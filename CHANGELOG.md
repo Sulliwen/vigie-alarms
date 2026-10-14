@@ -8,7 +8,7 @@ Les versions suivent le [versionnage sémantique](https://semver.org/lang/fr/) :
 - **MAJEURE** (x.0.0) : changement qui ne permet pas de garder les réglages
   existants.
 
-Le numéro est défini à un seul endroit, `__version__` dans `calendar_alarm.py`.
+Le numéro est défini à un seul endroit, `__version__` dans `vigie.py`.
 Il est repris par l'installeur et affiché en bas de la fenêtre « Paramètres ».
 
 ## 1.0.0 — 2026-10-13

@@ -7,9 +7,9 @@ from unittest import mock
 
 import icalendar
 
-import calendar_alarm
+import vigie
 import texts
-from calendar_alarm import Event, due_events, extract_events
+from vigie import Event, due_events, extract_events
 
 ICS = """BEGIN:VCALENDAR
 VERSION:2.0
@@ -139,7 +139,7 @@ class AgendaDaysTest(unittest.TestCase):
         wednesday = event("wednesday", monday.replace(hour=10) + timedelta(days=2))
         trip = Event("trip", monday, monday + timedelta(days=2), "trip", "", "cal", all_day=True)
         outside = event("outside", monday + timedelta(days=3))
-        agenda = calendar_alarm.agenda_days([late, wednesday, trip, early, outside], monday.date(), 3)
+        agenda = vigie.agenda_days([late, wednesday, trip, early, outside], monday.date(), 3)
         self.assertEqual(
             [(day.isoformat(), [e.key for e in events]) for day, events in agenda],
             [
@@ -152,12 +152,12 @@ class AgendaDaysTest(unittest.TestCase):
 
 class VersionTest(unittest.TestCase):
     def test_version_is_major_minor_patch(self):
-        self.assertRegex(calendar_alarm.__version__, r"^\d+\.\d+\.\d+$")
+        self.assertRegex(vigie.__version__, r"^\d+\.\d+\.\d+$")
 
 
 class IcsUrlTest(unittest.TestCase):
     def test_only_https_feeds_are_accepted(self):
-        normalize = calendar_alarm.normalize_ics_url
+        normalize = vigie.normalize_ics_url
         self.assertEqual(normalize(" https://x.test/basic.ics "), "https://x.test/basic.ics")
         self.assertEqual(normalize("webcal://x.test/basic.ics"), "https://x.test/basic.ics")
         for refused in ("file:///C:/secret.txt", "http://x.test/basic.ics", "basic.ics", ""):
@@ -183,35 +183,16 @@ class TextsTest(unittest.TestCase):
         self.assertEqual([key for key, text in texts.STRINGS["fr"].items() if informal.search(text)], [])
 
     def test_no_user_text_is_left_in_the_program(self):
-        source = Path(calendar_alarm.__file__).read_text(encoding="utf-8")
+        source = Path(vigie.__file__).read_text(encoding="utf-8")
         code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
         self.assertEqual(re.findall(r"[éèêàçùôî«»…]", code.replace('show="•"', "")), [])
 
 
 class ConfigTest(unittest.TestCase):
-    def test_single_account_configuration_is_migrated(self):
-        legacy = {"username": "AB12345", "calendars": ["url/mine"], "lead_minutes": 15}
-        with (
-            mock.patch("calendar_alarm.load_json", return_value=legacy),
-            mock.patch("calendar_alarm.save_json") as save_json,
-            mock.patch("calendar_alarm.keyring") as keyring,
-        ):
-            keyring.get_password.return_value = "secret"
-            config = calendar_alarm.load_config()
-        (account,) = config["accounts"]
-        self.assertEqual(
-            {**account, "id": "x"},
-            {"id": "x", "type": "caldav", "url": "https://sync.infomaniak.com", "username": "AB12345", "calendars": ["url/mine"]},
-        )
-        self.assertEqual(config["lead_minutes"], 15)
-        keyring.set_password.assert_called_once_with(f"calendar-alarm:{account['id']}", "secret", "secret")
-        keyring.delete_password.assert_called_once_with("calendar-alarm", "AB12345")
-        self.assertNotIn("username", save_json.call_args.args[1])
-
     def test_default_accounts_are_not_shared_between_configurations(self):
-        with mock.patch("calendar_alarm.load_json", return_value={}):
-            calendar_alarm.load_config()["accounts"].append("x")
-        self.assertEqual(calendar_alarm.DEFAULT_CONFIG["accounts"], [])
+        with mock.patch("vigie.load_json", return_value={}):
+            vigie.load_config()["accounts"].append("x")
+        self.assertEqual(vigie.DEFAULT_CONFIG["accounts"], [])
 
 
 class AppTest(unittest.TestCase):
@@ -219,12 +200,12 @@ class AppTest(unittest.TestCase):
 
     def setUp(self):
         for target in ("winsound.PlaySound", "keyring", "save_json"):
-            patcher = mock.patch(f"calendar_alarm.{target}")
+            patcher = mock.patch(f"vigie.{target}")
             setattr(self, target.split(".")[-1], patcher.start())
             self.addCleanup(patcher.stop)
         self.keyring.get_password.return_value = "secret"
-        with mock.patch("calendar_alarm.load_json", return_value={}):
-            self.app = calendar_alarm.App()
+        with mock.patch("vigie.load_json", return_value={}):
+            self.app = vigie.App()
         texts.set_language("fr")
         self.app.tray = mock.Mock()
         self.app.fetcher = mock.Mock()
@@ -294,9 +275,9 @@ class AppTest(unittest.TestCase):
         calendars = {}
         for url in ("url/mine", "url/colleague"):
             calendars[url] = (mock.Mock(**{"search.return_value": found}), url)
-        discovery = calendar_alarm.Discovery(calendars, set(), "Me")
-        fetcher = calendar_alarm.Fetcher(self.app)
-        with mock.patch("calendar_alarm.discover", return_value=discovery):
+        discovery = vigie.Discovery(calendars, set(), "Me")
+        fetcher = vigie.Fetcher(self.app)
+        with mock.patch("vigie.discover", return_value=discovery):
             return fetcher.fetch(self.caldav, "secret"), calendars
 
     def test_only_the_chosen_calendars_are_read(self):
@@ -311,14 +292,14 @@ class AppTest(unittest.TestCase):
     def test_calendars_must_be_chosen_first_and_still_exist(self):
         for chosen in (None, ["url/deleted"]):
             self.caldav["calendars"] = chosen
-            with self.assertRaises(calendar_alarm.CalendarsNeeded):
+            with self.assertRaises(vigie.CalendarsNeeded):
                 self.fetch_caldav([])
 
     def test_ical_feed_expands_recurrences_and_spots_declined_invitations(self):
-        fetcher = calendar_alarm.Fetcher(self.app)
+        fetcher = vigie.Fetcher(self.app)
         start = datetime(2026, 10, 13, 0, 0, tzinfo=timezone.utc)
         url = "https://calendar.test/ical/me%40example.com/private-abc/basic.ics"
-        with mock.patch("calendar_alarm.download_ics", return_value=ICS.encode()) as download:
+        with mock.patch("vigie.download_ics", return_value=ICS.encode()) as download:
             events = fetcher.fetch_ics(self.feed, url, start, start + timedelta(days=7))
             fetcher.fetch_ics(self.feed, url, start, start + timedelta(days=7))
         self.assertEqual(download.call_count, 2)
@@ -351,11 +332,11 @@ class AppTest(unittest.TestCase):
         self.app.config["accounts"].append(self.feed)
         self.app.on_refused("g")
         self.app.root.update()
-        self.assertIsInstance(self.app.dialogs["ics"], calendar_alarm.IcsDialog)
+        self.assertIsInstance(self.app.dialogs["ics"], vigie.IcsDialog)
         self.app.dialogs["ics"].close()
         self.app.on_refused("a")
         self.app.root.update()
-        self.assertIsInstance(self.app.dialogs["caldav"], calendar_alarm.CaldavDialog)
+        self.assertIsInstance(self.app.dialogs["caldav"], vigie.CaldavDialog)
         self.assertNotIn("ics", self.app.dialogs)
 
     def test_adding_and_removing_an_ical_feed(self):
@@ -372,7 +353,7 @@ class AppTest(unittest.TestCase):
         added = self.app.config["accounts"][1]
         self.assertEqual((added["type"], added["provider"], added["name"]), ("ics", "google", "Google"))
         self.keyring.set_password.assert_called_once_with(
-            f"calendar-alarm:{added['id']}", "secret", "https://calendar.test/basic.ics"
+            f"vigie:{added['id']}", "secret", "https://calendar.test/basic.ics"
         )
         # The address is a secret: it must stay out of the configuration file.
         self.assertNotIn("calendar.test", str(self.save_json.call_args.args[1]))
@@ -381,14 +362,14 @@ class AppTest(unittest.TestCase):
         self.app.remove_account(added)
         self.assertEqual(self.app.config["accounts"], [self.caldav])
         self.assertFalse(self.app.events)
-        self.keyring.delete_password.assert_called_once_with(f"calendar-alarm:{added['id']}", "secret")
+        self.keyring.delete_password.assert_called_once_with(f"vigie:{added['id']}", "secret")
 
     def test_first_launch_opens_the_accounts_window(self):
         self.app.config["accounts"] = []
         self.app.root.mainloop = mock.Mock()
-        with mock.patch("calendar_alarm.autostart_command", return_value=calendar_alarm.launch_command()):
+        with mock.patch("vigie.autostart_command", return_value=vigie.launch_command()):
             self.app.run()
-        self.assertIsInstance(self.app.dialogs["accounts"], calendar_alarm.AccountsDialog)
+        self.assertIsInstance(self.app.dialogs["accounts"], vigie.AccountsDialog)
 
     def test_dropdown_offers_every_provider_and_prefills_its_server(self):
         self.app.show_accounts()
@@ -420,7 +401,7 @@ class AppTest(unittest.TestCase):
         self.app.show_settings()
         self.app.root.update()
         dialog = self.app.dialogs["settings"]
-        self.assertIn(f"Calendar Alarm {calendar_alarm.__version__}", self.labels(dialog.footer))
+        self.assertIn(f"Vigie {vigie.__version__}", self.labels(dialog.footer))
         self.assertIn("Alarm 01", dialog.sound.cget("values"))
         self.assertEqual(dialog.sound.get(), "Alarm 01")
         dialog.lead = lambda: 15
@@ -431,8 +412,8 @@ class AppTest(unittest.TestCase):
         dialog.language.current(2)
         self.addCleanup(texts.set_language, "fr")
         with (
-            mock.patch("calendar_alarm.autostart_command", return_value=None),
-            mock.patch("calendar_alarm.set_autostart") as set_autostart,
+            mock.patch("vigie.autostart_command", return_value=None),
+            mock.patch("vigie.set_autostart") as set_autostart,
         ):
             dialog.autostart.set(True)
             dialog.submit()
@@ -454,7 +435,7 @@ class AppTest(unittest.TestCase):
             control
             for cell in dialog.grid.winfo_children()
             for control in cell.winfo_children()
-            if isinstance(control, calendar_alarm.tk.Spinbox)
+            if isinstance(control, vigie.tk.Spinbox)
         ][0]
         for typed, kept in (("999", 120), ("-3", 0), ("abc", 10), ("25", 25)):
             entry.delete(0, "end")
@@ -492,7 +473,7 @@ class AppTest(unittest.TestCase):
     # --- agenda
 
     def labels(self, widget):
-        found = [widget.cget("text")] if isinstance(widget, calendar_alarm.tk.Label) else []
+        found = [widget.cget("text")] if isinstance(widget, vigie.tk.Label) else []
         for child in widget.winfo_children():
             found.extend(self.labels(child))
         return found

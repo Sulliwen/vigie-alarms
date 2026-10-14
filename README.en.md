@@ -1,4 +1,4 @@
-# Calendar Alarm — an alarm before every appointment
+# Vigie — an alarm before every appointment
 
 *[Version française](README.md)*
 
@@ -13,7 +13,7 @@ rings as soon as it is found.
 
 ## Installation
 
-1. Run `CalendarAlarm-Setup-<version>.exe` (no administrator rights needed).
+1. Run `Vigie-Setup-<version>.exe` (no administrator rights needed).
    The file is not signed, so Windows shows a SmartScreen warning: “More
    info” → “Run anyway”.
 2. When the installation ends, the **“Synced calendars”** window opens.
@@ -84,11 +84,11 @@ Right-click on the icon → “Settings…”:
 - **General**: language, how often calendars are read again, starting with
   Windows.
 
-Settings are saved in `%LOCALAPPDATA%\calendar-alarm\config.json`. Two of them
+Settings are saved in `%LOCALAPPDATA%\vigie\config.json`. Two of them
 can only be changed in that file: `late_grace_minutes` (how late an appointment
 may still ring, 5 by default) and `my_emails` (addresses used to recognise the
 invitations you declined). The log is in the same folder
-(`calendar-alarm.log`).
+(`vigie.log`).
 
 ## From the sources
 

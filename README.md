@@ -1,4 +1,4 @@
-# Calendar Alarm — une alarme avant chaque rendez-vous
+# Vigie — une alarme avant chaque rendez-vous
 
 *[English version](README.en.md)*
 
@@ -13,7 +13,7 @@ minute sonne dès qu'il est découvert.
 
 ## Installation
 
-1. Lancez `CalendarAlarm-Setup-<version>.exe` (aucun droit administrateur
+1. Lancez `Vigie-Setup-<version>.exe` (aucun droit administrateur
    requis). Le fichier n'étant pas signé, Windows affiche un avertissement
    SmartScreen : « Informations complémentaires » → « Exécuter quand même ».
 2. À la fin de l'installation, la fenêtre **« Agendas synchronisés »**
@@ -89,11 +89,11 @@ Clic droit sur l'icône → « Paramètres… » :
 - **Général** : langue, fréquence de relecture des agendas, lancement au
   démarrage de Windows.
 
-Les réglages sont enregistrés dans `%LOCALAPPDATA%\calendar-alarm\config.json`.
+Les réglages sont enregistrés dans `%LOCALAPPDATA%\vigie\config.json`.
 Deux d'entre eux ne se changent que dans ce fichier : `late_grace_minutes`
 (retard toléré pour sonner quand même, 5 par défaut) et `my_emails` (adresses
 servant à reconnaître vos invitations refusées). Le journal est dans le même
-dossier (`calendar-alarm.log`).
+dossier (`vigie.log`).
 
 ## Depuis les sources
 
