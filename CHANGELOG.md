@@ -22,6 +22,8 @@ Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
 - Alertes Slack : son à chaque message privé ou tag personnel, puis une seule
   alarme pour les messages encore non lus après 5 minutes ; respect du « Ne pas
   déranger » de Slack ; réglages dans Paramètres → Slack.
+- Personnes VIP sur Slack : tous leurs messages, même sans tag, sont annoncés
+  par un son puis une voix « Message VIP », sans alarme.
 - Mode développement (`dev.ps1`) : lancement depuis le code, redémarrage
   automatique à chaque modification.
 

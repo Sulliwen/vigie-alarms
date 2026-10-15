@@ -213,6 +213,30 @@ class SlackRulesTest(unittest.TestCase):
         self.assertFalse(self.concerns("dm", subtype="message_changed"))
         self.assertFalse(self.concerns("dm", subtype="bot_message"))
 
+    def test_vip_people_are_matched_by_any_name_in_any_word_order(self):
+        names = ["Jakez", "Jakez Rolland"]
+        event = {"user": "UJ", "text": "no tag"}
+        self.assertTrue(slack_alerts.is_vip(event, self.me, ["Jakez", "Jakez Rolland", "jakez.rolland"], names))
+        self.assertTrue(slack_alerts.is_vip(event, self.me, ["Rolland  Jakez"], names))
+        self.assertFalse(slack_alerts.is_vip(event, self.me, ["Jakez Martin"], names))
+        self.assertFalse(slack_alerts.is_vip(event, self.me, ["Jakez"], []))
+        self.assertFalse(slack_alerts.is_vip({**event, "subtype": "message_changed"}, self.me, ["Jakez"], names))
+        self.assertFalse(slack_alerts.is_vip({**event, "user": "UME"}, self.me, ["Jakez"], names))
+
+    def test_a_vip_message_in_a_channel_is_passed_on_without_a_tag(self):
+        received = []
+        watcher = slack_alerts.SlackWatcher("xapp-1", "xoxp-1", on_message=received.append, vip_names=["Jakez Rolland"])
+        watcher.me = "UME"
+        watcher.kinds = {"C1": ("channel", "dev")}
+        watcher.profiles = {"UJ": ["Rolland Jakez"], "UA": ["Ana"]}
+        client = mock.Mock()
+        for user in ("UJ", "UA"):
+            payload = {"event": {"type": "message", "channel": "C1", "user": user, "text": "hello", "ts": "1.0"}}
+            watcher.handle(client, mock.Mock(type="events_api", payload=payload, envelope_id="e"))
+        (message,) = received
+        self.assertTrue(message.vip)
+        self.assertEqual((message.author, message.conversation), ("Rolland Jakez", "#dev"))
+
     def test_do_not_disturb(self):
         now = 1000
         self.assertFalse(slack_alerts.dnd_active({"dnd_enabled": True, "next_dnd_start_ts": 2000, "next_dnd_end_ts": 3000}, now))
@@ -629,6 +653,20 @@ class AppTest(unittest.TestCase):
         self.app.on_events("a", [])
         self.assertEqual(len(self.app.windows), 1)
 
+    def test_a_vip_message_is_announced_once_a_minute_and_never_rings(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        vip = slack_alerts.SlackMessage("Ddm", "100.0", "Jakez", "dm", "", False, vip=True)
+        with mock.patch("vigie.announce") as announce, mock.patch("vigie.play_once") as play_once:
+            self.app.on_slack_message(vip)
+            self.app.on_slack_message(slack_alerts.SlackMessage("Ddm", "101.0", "Jakez", "dm", "", False, vip=True))
+        announce.assert_called_once_with(self.app.config["slack_vip_sound"], "Message VIP", with_sound=True)
+        play_once.assert_not_called()
+        self.assertIsNone(self.app.slack_group)
+        self.app.vip_announced["Jakez"] -= vigie.VIP_QUIET_SECONDS
+        with mock.patch("vigie.announce") as announce:
+            self.app.on_slack_message(vip)
+        announce.assert_called_once()
+
     def test_saving_tokens_turns_slack_on(self):
         with mock.patch.object(self.app, "start_slack") as start_slack:
             self.app.save_slack_tokens("xapp-1", "xoxp-1")
@@ -642,6 +680,7 @@ class AppTest(unittest.TestCase):
         dialog = self.app.dialogs["settings"]
         dialog.slack_enabled.set(True)
         dialog.slack_delay = lambda: 3
+        dialog.slack_vip.insert(0, "Jakez, Jakez Rolland ,")
         with (
             mock.patch("vigie.autostart_command", return_value=None),
             mock.patch.object(self.app, "start_slack"),
@@ -649,6 +688,8 @@ class AppTest(unittest.TestCase):
             dialog.submit()
         self.assertEqual((self.app.config["slack_enabled"], self.app.config["slack_delay_minutes"]), (True, 3))
         self.assertTrue(self.app.config["slack_sound"].lower().endswith(".wav"))
+        self.assertEqual(self.app.config["slack_vip_names"], ["Jakez", "Jakez Rolland"])
+        self.assertTrue(self.app.config["slack_vip_sound"].lower().endswith(".wav"))
 
     # --- agenda
 

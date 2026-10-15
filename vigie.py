@@ -85,6 +85,9 @@ DEFAULT_CONFIG = {
     "slack_enabled": False,
     "slack_delay_minutes": 5,
     "slack_sound": r"C:\Windows\Media\Windows Notify Messaging.wav",
+    # Everything these people post is announced (a sound, then a voice), with no alarm.
+    "slack_vip_names": [],
+    "slack_vip_sound": r"C:\Windows\Media\Windows Notify Email.wav",
     # An event found after it started still rings during this many minutes.
     "late_grace_minutes": 5,
     "poll_seconds": 60,
@@ -96,6 +99,8 @@ DEFAULT_CONFIG = {
 SILENCE_CHOICES = [0, 1, 2, 5, 10]
 POLL_CHOICES = [60, 120, 300]
 RETRY_SECONDS = 15
+VIP_QUIET_SECONDS = 60
+VOICE_CULTURES = {"fr": "fr-FR", "en": "en-US"}
 TICK_MS = 500
 REDISCOVER_SECONDS = 1800
 TEST_PREFIX = "test:"
@@ -427,6 +432,35 @@ def sound_choices(sounds, current):
 
 def play_once(path):
     winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+
+
+def speak(text):
+    """Says text with a Windows voice of the interface language; returns at once."""
+    culture = VOICE_CULTURES.get(texts.language(), "en-US")
+    script = (
+        "Add-Type -AssemblyName System.Speech; $voice = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"try {{ $voice.SelectVoiceByHints('NotSet', 'NotSet', 0, [Globalization.CultureInfo]'{culture}') }} catch {{}}; "
+        "$voice.Speak($env:VIGIE_SAY)"
+    )
+    subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        env={**os.environ, "VIGIE_SAY": text},
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+
+def announce(sound, text, with_sound=True):
+    """A sound, then a voice saying text, off the UI thread."""
+
+    def run():
+        try:
+            if with_sound:
+                winsound.PlaySound(sound, winsound.SND_FILENAME | winsound.SND_NODEFAULT)
+            speak(text)
+        except Exception:
+            log.exception("announce failed")
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def normalize_ics_url(url):
@@ -830,6 +864,20 @@ class SettingsDialog(Dialog):
         button(extras, t("sound_preview"), lambda: self.preview(self.slack_sounds[self.slack_sound.get()]), "link").pack(
             side="left"
         )
+        self.slack_vip = tk.Entry(
+            self.grid, font=(FONT, 10), width=30, relief="flat",
+            highlightthickness=1, highlightbackground="#c4c7cc", highlightcolor=COLOR_ACCENT,
+        )
+        self.slack_vip.insert(0, ", ".join(config["slack_vip_names"]))
+        self.place(t("slack_vip_label"), self.slack_vip)
+        self.label(self.grid, t("slack_vip_hint"), font=(FONT, 9), fg=COLOR_MUTED).grid(
+            row=self.next_row, column=1, columnspan=2, sticky="w", pady=(0, 4)
+        )
+        self.next_row += 1
+        self.vip_sounds, chosen = sound_choices(notification_sounds(), config["slack_vip_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.slack_vip_sound = self.choice(t("slack_vip_sound_label"), list(self.vip_sounds), chosen, extras)
+        button(extras, t("sound_preview"), self.preview_vip, "link").pack(side="left")
 
         self.section(t("section_agenda"))
         self.days = self.number(t("agenda_days_label"), config["agenda_days"], 1, 14, t("unit_days"))
@@ -905,6 +953,9 @@ class SettingsDialog(Dialog):
         if not self.app.sound_playing:
             play_once(path)
 
+    def preview_vip(self):
+        announce(self.vip_sounds[self.slack_vip_sound.get()], t("slack_vip_voice"), with_sound=not self.app.sound_playing)
+
     def browse(self):
         path = filedialog.askopenfilename(parent=self, filetypes=[(t("wav_files"), "*.wav")])
         if path:
@@ -929,6 +980,8 @@ class SettingsDialog(Dialog):
             "slack_enabled": self.slack_enabled.get(),
             "slack_delay_minutes": self.slack_delay(),
             "slack_sound": self.slack_sounds[self.slack_sound.get()],
+            "slack_vip_names": [name.strip() for name in self.slack_vip.get().split(",") if name.strip()],
+            "slack_vip_sound": self.vip_sounds[self.slack_vip_sound.get()],
         }
         autostart = self.autostart.get()
         self.close()
@@ -1290,6 +1343,7 @@ class App:
         self.slack_checking = False
         self.slack_retry_at = 0.0
         self.slack_recheck_at = 0.0
+        self.vip_announced = {}
 
     # --- plumbing -------------------------------------------------------
 
@@ -1395,7 +1449,7 @@ class App:
         if tokens is None:
             self.slack_state = "no_tokens"
             return
-        watcher = SlackWatcher(*tokens, on_message=self.slack_received)
+        watcher = SlackWatcher(*tokens, on_message=self.slack_received, vip_names=self.config["slack_vip_names"])
         self.slack_state = "connecting"
 
         def connect():
@@ -1442,6 +1496,9 @@ class App:
         self.post(partial(self.on_slack_message, message))
 
     def on_slack_message(self, message):
+        if message.vip:
+            self.announce_vip(message)
+            return
         if not self.sound_playing:
             play_once(self.config["slack_sound"])
         # The first unread message starts the delay; the next ones join it.
@@ -1449,6 +1506,16 @@ class App:
             deadline = datetime.now().astimezone() + timedelta(minutes=self.config["slack_delay_minutes"])
             self.slack_group = {"deadline": deadline, "messages": []}
         self.slack_group["messages"].append(message)
+
+    def announce_vip(self, message):
+        """A VIP message: a sound and "VIP message" aloud, never an alarm; a burst is announced once a minute."""
+        now = time.time()
+        if now - self.vip_announced.get(message.author, 0.0) < VIP_QUIET_SECONDS:
+            return
+        self.vip_announced[message.author] = now
+        log.info("slack: VIP message announced")
+        # Over a ringing alarm, the voice alone: a new sound would stop the alarm's.
+        announce(self.config["slack_vip_sound"], t("slack_vip_voice"), with_sound=not self.sound_playing)
 
     def slack_tick(self, now):
         group = self.slack_group

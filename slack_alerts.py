@@ -4,6 +4,8 @@ A message concerns the user when it is a direct message, or when it tags them pe
 a channel, a group conversation or a thread. Nothing else does: untagged messages, @here, @channel,
 user-group mentions and the user's own messages stay silent.
 
+VIP people are the exception: every message they post where the user is a member is announced, tag or not.
+
 Messages arrive in real time through Socket Mode, so no public server is needed. Whether a message has
 been read comes from the conversation's last_read position.
 """
@@ -36,6 +38,7 @@ class SlackMessage:
     kind: str
     conversation: str
     in_thread: bool
+    vip: bool = False
 
 
 def concerns_me(event, me, kind):
@@ -43,6 +46,19 @@ def concerns_me(event, me, kind):
     if event.get("user") == me or event.get("subtype") not in ALERT_SUBTYPES:
         return False
     return kind == "dm" or f"<@{me}>" in (event.get("text") or "")
+
+
+def name_key(name):
+    """A name compared without case or word order: "Jakez Rolland" and "rolland jakez" are the same."""
+    return tuple(sorted(name.lower().split()))
+
+
+def is_vip(event, me, profile_names, vip_names):
+    """Whether a message comes from one of the VIP people, matched by any of their Slack names."""
+    if event.get("user") == me or event.get("subtype") not in ALERT_SUBTYPES:
+        return False
+    wanted = {name_key(name) for name in vip_names if name.strip()}
+    return any(name_key(name) in wanted for name in profile_names if name)
 
 
 def dnd_active(info, now):
@@ -56,7 +72,7 @@ def dnd_active(info, now):
 class SlackWatcher:
     """Listens to Slack for the user and hands the messages that concern them to on_message."""
 
-    def __init__(self, app_token, user_token, on_message):
+    def __init__(self, app_token, user_token, on_message, vip_names=()):
         self.web = WebClient(token=user_token)
         self.web.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=3))
         self.app_token = app_token
@@ -65,7 +81,8 @@ class SlackWatcher:
         self.team = None
         self.socket = None
         self.kinds = {}
-        self.names = {}
+        self.profiles = {}
+        self.vip_names = list(vip_names)
         self.dnd = (0.0, {})
         self.lock = threading.Lock()
 
@@ -97,7 +114,8 @@ class SlackWatcher:
             return
         try:
             kind = self.kind_of(event["channel"])
-            if not concerns_me(event, self.me, kind):
+            vip = bool(self.vip_names) and is_vip(event, self.me, self.profile_names(event.get("user")), self.vip_names)
+            if not vip and not concerns_me(event, self.me, kind):
                 return
             message = SlackMessage(
                 channel=event["channel"],
@@ -106,11 +124,12 @@ class SlackWatcher:
                 kind=kind,
                 conversation=self.conversation_name(event["channel"], kind),
                 in_thread=bool(event.get("thread_ts")) and event.get("thread_ts") != event.get("ts"),
+                vip=vip,
             )
         except Exception:
             log.exception("slack: could not read an incoming message")
             return
-        log.info("slack: message for me (%s%s)", kind, ", thread" if message.in_thread else "")
+        log.info("slack: %s message (%s%s)", "VIP" if vip else "my", kind, ", thread" if message.in_thread else "")
         self.on_message(message)
 
     def info(self, channel):
@@ -133,16 +152,23 @@ class SlackWatcher:
             return f"#{self.kinds[channel][1]}"
         return ""
 
-    def user_name(self, user):
+    def profile_names(self, user):
+        """The names a user goes by in Slack, display name first; [] when unknown."""
         if not user:
-            return "?"
-        if user not in self.names:
+            return []
+        if user not in self.profiles:
             try:
-                profile = self.web.users_info(user=user)["user"]
-                self.names[user] = profile.get("profile", {}).get("display_name") or profile.get("real_name") or user
+                info = self.web.users_info(user=user)["user"]
+                profile = info.get("profile", {})
+                names = [profile.get("display_name"), info.get("real_name"), profile.get("real_name"), info.get("name")]
+                self.profiles[user] = [name for name in names if name]
             except SlackApiError:
-                self.names[user] = user
-        return self.names[user]
+                self.profiles[user] = []
+        return self.profiles[user]
+
+    def user_name(self, user):
+        names = self.profile_names(user)
+        return names[0] if names else (user or "?")
 
     # --- read state and "Do not disturb"
 

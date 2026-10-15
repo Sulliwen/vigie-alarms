@@ -69,6 +69,13 @@ mentions d'un groupe, vos propres messages.
   se ferme d'elle-même dès qu'ils sont lus.
 - Rien pendant vos horaires « Ne pas déranger » de Slack.
 
+**Personnes VIP** (Paramètres → Slack, noms séparés par des virgules) : tous
+leurs messages sont annoncés, partout où vous êtes membre, même sans tag. Un son,
+puis une voix dit « Message VIP ». Il n'y a jamais d'alarme pour eux, et une
+série de messages n'est annoncée qu'une fois par minute. Le nom est comparé sans
+tenir compte des majuscules ni de l'ordre des mots (« Jakez Rolland » reconnaît
+aussi « Rolland Jakez »).
+
 Mise en place, une fois : sur <https://api.slack.com/apps>, « Create New App » →
 « From a manifest », choisir l'espace de travail et coller :
 

@@ -67,6 +67,12 @@ your own messages.
   itself as soon as they are read.
 - Nothing during your Slack “Do not disturb” hours.
 
+**VIP people** (Settings → Slack, names separated by commas): all their messages
+are announced, wherever you are a member, even without a tag. A sound, then a
+voice says “VIP message”. They never trigger an alarm, and a series of messages
+is announced once a minute. Names are compared regardless of case and word
+order (“Jakez Rolland” also matches “Rolland Jakez”).
+
 Setting up, once: on <https://api.slack.com/apps>, “Create New App” → “From a
 manifest”, choose the workspace and paste:
 
