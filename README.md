@@ -56,6 +56,43 @@ comme un mot de passe, ne la partagez pas.
 Un rendez-vous présent dans deux agendas (invitation reçue sur les deux) ne
 sonne qu'une fois.
 
+## Alertes Slack
+
+Vigie peut aussi surveiller Slack, uniquement pour **vos messages privés** et les
+messages qui **vous taguent personnellement** (canal, conversation de groupe ou
+fil). Le reste ne sonne jamais : messages sans votre tag, `@here`, `@channel`,
+mentions d'un groupe, vos propres messages.
+
+- Un son court à chaque message qui vous concerne.
+- Si un message n'est toujours pas lu 5 minutes après le premier d'une série,
+  **une seule alarme** liste les messages non lus, avec « Ouvrir Slack ». Elle
+  se ferme d'elle-même dès qu'ils sont lus.
+- Rien pendant vos horaires « Ne pas déranger » de Slack.
+
+Mise en place, une fois : sur <https://api.slack.com/apps>, « Create New App » →
+« From a manifest », choisir l'espace de travail et coller :
+
+```yaml
+display_information:
+  name: Vigie
+  description: Alerte locale pour mes messages privés et mes mentions
+oauth_config:
+  scopes:
+    user: [channels:history, groups:history, im:history, mpim:history,
+           channels:read, groups:read, im:read, mpim:read,
+           users:read, dnd:read]
+settings:
+  event_subscriptions:
+    user_events: [message.channels, message.groups, message.im, message.mpim]
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+```
+
+Puis « Basic Information » → « App-Level Tokens » → générer un jeton avec la
+permission `connections:write`, et « Install App » → « Install to Workspace ».
+Dans Vigie : Paramètres → Slack → « Jetons Slack… », y coller les deux jetons
+(`xapp-…` et `xoxp-…`).
+
 ## Comportement
 
 - Sonnerie en boucle jusqu'à un clic. Fermer la fenêtre par la croix vaut

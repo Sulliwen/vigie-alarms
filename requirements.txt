@@ -2,3 +2,4 @@ caldav
 keyring
 pystray
 Pillow
+slack_sdk

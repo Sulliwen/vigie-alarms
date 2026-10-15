@@ -54,6 +54,43 @@ password, do not share it.
 An appointment present in two calendars (an invitation received on both) rings
 only once.
 
+## Slack alerts
+
+Vigie can also watch Slack, only for **your direct messages** and the messages
+that **tag you personally** (channel, group conversation or thread). Nothing
+else ever rings: untagged messages, `@here`, `@channel`, user-group mentions,
+your own messages.
+
+- A short sound for each message that concerns you.
+- If a message is still unread 5 minutes after the first one of a series,
+  **a single alarm** lists the unread messages, with “Open Slack”. It closes by
+  itself as soon as they are read.
+- Nothing during your Slack “Do not disturb” hours.
+
+Setting up, once: on <https://api.slack.com/apps>, “Create New App” → “From a
+manifest”, choose the workspace and paste:
+
+```yaml
+display_information:
+  name: Vigie
+  description: Alerte locale pour mes messages privés et mes mentions
+oauth_config:
+  scopes:
+    user: [channels:history, groups:history, im:history, mpim:history,
+           channels:read, groups:read, im:read, mpim:read,
+           users:read, dnd:read]
+settings:
+  event_subscriptions:
+    user_events: [message.channels, message.groups, message.im, message.mpim]
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+```
+
+Then “Basic Information” → “App-Level Tokens” → generate a token with the
+`connections:write` permission, and “Install App” → “Install to Workspace”. In
+Vigie: Settings → Slack → “Slack tokens…”, paste both tokens (`xapp-…` and
+`xoxp-…`).
+
 ## Behaviour
 
 - The alarm loops until you click. Closing the window with the cross means

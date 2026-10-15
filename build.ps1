@@ -10,7 +10,7 @@ Set-Location $dir
 & $python -c "import vigie as c; c.make_icon().save(r'$icon', sizes=[(s, s) for s in (16, 24, 32, 48, 64, 256)])"
 & $python -m PyInstaller --noconfirm --onedir --windowed --name Vigie --icon $icon --add-data "$(Join-Path $dir 'assets\vigie.png');assets" `
     --collect-submodules caldav --collect-submodules icalendar --collect-submodules icalendar_searcher `
-    --collect-submodules recurring_ical_events --collect-submodules x_wr_timezone --collect-submodules keyring `
+    --collect-submodules recurring_ical_events --collect-submodules x_wr_timezone --collect-submodules keyring --collect-submodules slack_sdk `
     --collect-data icalendar --collect-data tzdata `
     --distpath (Join-Path $dir 'dist') --workpath (Join-Path $dir 'build') --specpath (Join-Path $dir 'build') `
     (Join-Path $dir 'vigie.py')

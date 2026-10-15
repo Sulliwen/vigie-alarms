@@ -7,8 +7,9 @@ from unittest import mock
 
 import icalendar
 
-import vigie
+import slack_alerts
 import texts
+import vigie
 from vigie import Event, due_events, extract_events
 
 ICS = """BEGIN:VCALENDAR
@@ -192,6 +193,44 @@ class DevModeTest(unittest.TestCase):
             self.assertEqual(self.watch([source], edit("x = (\n")), 0)
 
 
+class SlackRulesTest(unittest.TestCase):
+    me = "UME"
+
+    def concerns(self, kind, **event):
+        return slack_alerts.concerns_me({"user": "UOTHER", "text": "hello", **event}, self.me, kind)
+
+    def test_only_direct_messages_and_personal_tags_ring(self):
+        self.assertTrue(self.concerns("dm"))
+        self.assertTrue(self.concerns("dm", subtype="file_share"))
+        for kind in ("channel", "private-channel", "group-dm"):
+            self.assertTrue(self.concerns(kind, text="<@UME> can you check?"), kind)
+            self.assertFalse(self.concerns(kind), kind)
+            self.assertFalse(self.concerns(kind, text="<!here> <!channel> <!subteam^S1>"), kind)
+        self.assertTrue(self.concerns("channel", text="<@UME>", thread_ts="1.0", ts="2.0"))
+
+    def test_own_messages_edits_and_bots_never_ring(self):
+        self.assertFalse(self.concerns("dm", user="UME", text="<@UME>"))
+        self.assertFalse(self.concerns("dm", subtype="message_changed"))
+        self.assertFalse(self.concerns("dm", subtype="bot_message"))
+
+    def test_do_not_disturb(self):
+        now = 1000
+        self.assertFalse(slack_alerts.dnd_active({"dnd_enabled": True, "next_dnd_start_ts": 2000, "next_dnd_end_ts": 3000}, now))
+        self.assertTrue(slack_alerts.dnd_active({"dnd_enabled": True, "next_dnd_start_ts": 900, "next_dnd_end_ts": 3000}, now))
+        self.assertFalse(slack_alerts.dnd_active({"dnd_enabled": False, "next_dnd_start_ts": 900, "next_dnd_end_ts": 3000}, now))
+        self.assertTrue(slack_alerts.dnd_active({"snooze_enabled": True, "snooze_endtime": 1500}, now))
+        self.assertFalse(slack_alerts.dnd_active({"snooze_enabled": True, "snooze_endtime": 500}, now))
+
+    def test_read_position_decides_what_is_unseen(self):
+        watcher = slack_alerts.SlackWatcher("xapp-1", "xoxp-1", on_message=None)
+        positions = {"D1": "200.0", "C1": None}
+        watcher.info = lambda channel: {"last_read": positions[channel]}
+        read = slack_alerts.SlackMessage("D1", "150.0", "Ana", "dm", "", False)
+        unread = slack_alerts.SlackMessage("D1", "250.0", "Ana", "dm", "", False)
+        unknown = slack_alerts.SlackMessage("C1", "100.0", "Ana", "channel", "#dev", True)
+        self.assertEqual(watcher.unseen([read, unread, unknown]), [unread, unknown])
+
+
 class VersionTest(unittest.TestCase):
     def test_version_is_major_minor_patch(self):
         self.assertRegex(vigie.__version__, r"^\d+\.\d+\.\d+$")
@@ -231,6 +270,15 @@ class TextsTest(unittest.TestCase):
 
 
 class ConfigTest(unittest.TestCase):
+    def test_forget_also_removes_the_slack_tokens(self):
+        with (
+            mock.patch("vigie.load_json", return_value={"accounts": [{"id": "a1"}]}),
+            mock.patch("vigie.keyring") as keyring,
+        ):
+            vigie.forget()
+        removed = {call.args[0] for call in keyring.delete_password.call_args_list}
+        self.assertEqual(removed, {"vigie:a1", "vigie:slack:app", "vigie:slack:user"})
+
     def test_default_accounts_are_not_shared_between_configurations(self):
         with mock.patch("vigie.load_json", return_value={}):
             vigie.load_config()["accounts"].append("x")
@@ -511,6 +559,96 @@ class AppTest(unittest.TestCase):
         default[0](None)
         self.app.inbox.get_nowait()()
         self.assertIn("agenda", self.app.dialogs)
+
+    # --- slack
+
+    def slack_message(self, ts, kind="dm", author="Ana"):
+        return slack_alerts.SlackMessage(f"D{kind}", ts, author, kind, "#dev" if "channel" in kind else "", False)
+
+    def connect_slack(self, unseen):
+        self.app.slack = mock.Mock(**{"unseen.side_effect": unseen, "do_not_disturb.return_value": False})
+        self.app.slack.link.return_value = "slack://channel?team=T1&id=Ddm"
+        self.app.background = lambda work, done: done(work())
+        self.app.config["slack_delay_minutes"] = 5
+
+    def test_one_alarm_for_the_messages_still_unread_after_the_delay(self):
+        self.connect_slack(unseen=lambda messages: messages[1:])
+        first, second = self.slack_message("100.0"), self.slack_message("101.0", kind="channel", author="Yann")
+        with mock.patch("vigie.play_once") as play_once:
+            self.app.on_slack_message(first)
+            self.app.on_slack_message(second)
+        self.assertEqual(play_once.call_count, 2)
+        self.tick()
+        self.assertFalse(self.app.windows)
+        self.app.slack.unseen.assert_not_called()
+
+        self.app.slack_group["deadline"] = self.now - timedelta(seconds=1)
+        self.tick()
+        self.app.slack.unseen.assert_called_once_with([first, second])
+        (window,) = self.app.windows.values()
+        self.assertIsInstance(window, vigie.SlackAlarmWindow)
+        shown = self.labels(window)
+        self.assertIn("1 message Slack non lu", shown)
+        self.assertIn("Yann", shown)
+        self.assertIn("#dev", shown)
+        self.assertNotIn("Ana", shown)
+        self.assertTrue(self.app.sound_playing)
+        self.assertIsNone(self.app.slack_group)
+
+        # Read meanwhile: the alarm closes by itself.
+        self.app.slack.unseen.side_effect = lambda messages: []
+        self.app.slack_recheck_at = 0
+        self.tick()
+        self.assertFalse(self.app.windows)
+        self.assertFalse(self.app.sound_playing)
+
+    def test_nothing_rings_when_everything_was_read_in_time(self):
+        self.connect_slack(unseen=lambda messages: [])
+        with mock.patch("vigie.play_once"):
+            self.app.on_slack_message(self.slack_message("100.0"))
+        self.app.slack_group["deadline"] = self.now - timedelta(seconds=1)
+        self.tick()
+        self.assertFalse(self.app.windows)
+
+    def test_do_not_disturb_silences_slack(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        self.app.slack.do_not_disturb.return_value = True
+        self.app.slack_received(self.slack_message("100.0"))
+        self.assertTrue(self.app.inbox.empty())
+
+    def test_open_slack_goes_to_the_conversation(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        self.app.ring_slack([self.slack_message("100.0")])
+        (window,) = self.app.windows.values()
+        with mock.patch("vigie.os.startfile") as startfile:
+            window.open()
+        startfile.assert_called_once_with("slack://channel?team=T1&id=Ddm")
+        self.assertFalse(self.app.windows)
+        # An appointment sync does not trip over the Slack window.
+        self.app.ring_slack([self.slack_message("101.0")])
+        self.app.on_events("a", [])
+        self.assertEqual(len(self.app.windows), 1)
+
+    def test_saving_tokens_turns_slack_on(self):
+        with mock.patch.object(self.app, "start_slack") as start_slack:
+            self.app.save_slack_tokens("xapp-1", "xoxp-1")
+        self.keyring.set_password.assert_any_call("vigie:slack:app", "secret", "xapp-1")
+        self.keyring.set_password.assert_any_call("vigie:slack:user", "secret", "xoxp-1")
+        self.assertTrue(self.app.config["slack_enabled"])
+        start_slack.assert_called_once()
+
+    def test_slack_settings_are_saved(self):
+        self.app.show_settings()
+        dialog = self.app.dialogs["settings"]
+        dialog.slack_enabled.set(True)
+        dialog.slack_delay = lambda: 3
+        with (
+            mock.patch("vigie.autostart_command", return_value=None),
+            mock.patch.object(self.app, "start_slack"),
+        ):
+            dialog.submit()
+        self.assertEqual((self.app.config["slack_enabled"], self.app.config["slack_delay_minutes"]), (True, 3))
+        self.assertTrue(self.app.config["slack_sound"].lower().endswith(".wav"))
 
     # --- agenda
 

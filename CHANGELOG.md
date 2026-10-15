@@ -19,6 +19,12 @@ Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
   zone de notification. Une pastille verte ou rouge dans le coin indique si les
   agendas se synchronisent.
 
+- Alertes Slack : son à chaque message privé ou tag personnel, puis une seule
+  alarme pour les messages encore non lus après 5 minutes ; respect du « Ne pas
+  déranger » de Slack ; réglages dans Paramètres → Slack.
+- Mode développement (`dev.ps1`) : lancement depuis le code, redémarrage
+  automatique à chaque modification.
+
 ## 1.0.0 — 2026-10-13
 
 Première version de Vigie, reprise de Calendar Alarm 1.0.0 sous son propre nom.

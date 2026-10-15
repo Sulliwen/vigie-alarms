@@ -45,7 +45,9 @@ import recurring_ical_events
 from caldav.lib.error import AuthorizationError
 from PIL import Image, ImageDraw, ImageTk
 
+import slack_alerts
 import texts
+from slack_alerts import SlackWatcher
 from texts import PROVIDERS, t
 
 # MAJOR.MINOR.PATCH (semver.org): PATCH for a fix, MINOR for a new feature, MAJOR when an update
@@ -55,7 +57,7 @@ __version__ = "1.0.0"
 APP = "vigie"
 # --dev: run from the sources and restart by itself whenever they change.
 DEV = "--dev" in sys.argv
-SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py")]
+SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py", "slack_alerts.py")]
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
@@ -78,6 +80,11 @@ DEFAULT_CONFIG = {
     # Days read ahead, today included: the alarms need the next minutes, the agenda window the rest.
     "agenda_days": 7,
     "show_all_day": True,
+    # Slack: a short sound for each message that concerns the user, then one alarm for whatever is
+    # still unread this many minutes after the first one.
+    "slack_enabled": False,
+    "slack_delay_minutes": 5,
+    "slack_sound": r"C:\Windows\Media\Windows Notify Messaging.wav",
     # An event found after it started still rings during this many minutes.
     "late_grace_minutes": 5,
     "poll_seconds": 60,
@@ -174,6 +181,28 @@ def delete_secret(account):
         keyring.delete_password(secret_service(account), "secret")
     except keyring.errors.PasswordDeleteError:
         pass
+
+
+SLACK_SERVICES = {"app": f"{APP}:slack:app", "user": f"{APP}:slack:user"}
+
+
+def slack_tokens():
+    """(app token, user token), or None until both are saved."""
+    tokens = tuple(keyring.get_password(SLACK_SERVICES[kind], "secret") for kind in ("app", "user"))
+    return tokens if all(tokens) else None
+
+
+def set_slack_tokens(app_token, user_token):
+    keyring.set_password(SLACK_SERVICES["app"], "secret", app_token)
+    keyring.set_password(SLACK_SERVICES["user"], "secret", user_token)
+
+
+def delete_slack_tokens():
+    for service in SLACK_SERVICES.values():
+        try:
+            keyring.delete_password(service, "secret")
+        except keyring.errors.PasswordDeleteError:
+            pass
 
 
 def load_config():
@@ -374,6 +403,30 @@ def alarm_sounds():
         for pattern in ("Alarm??.wav", "Ring??.wav")
         for path in sorted(media.glob(pattern))
     }
+
+
+def notification_sounds():
+    """{name: path} of the short notification sounds that come with Windows."""
+    media = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "Media"
+    return {
+        path.stem: str(path)
+        for pattern in ("Windows Notify*.wav", "Windows Message Nudge.wav", "Windows Ding.wav", "chimes.wav")
+        for path in sorted(media.glob(pattern))
+    }
+
+
+def sound_choices(sounds, current):
+    """The sounds on offer, with the current one added when it is a file of the user's; and its name."""
+    sounds = dict(sounds)
+    # Compared the way Windows does: C:\Windows and C:\WINDOWS are the same folder.
+    wanted = os.path.normcase(current)
+    if wanted not in map(os.path.normcase, sounds.values()):
+        sounds[Path(current).name] = current
+    return sounds, next(name for name, path in sounds.items() if os.path.normcase(path) == wanted)
+
+
+def play_once(path):
+    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
 
 
 def normalize_ics_url(url):
@@ -754,20 +807,29 @@ class SettingsDialog(Dialog):
         self.section(t("section_alarm"))
         self.lead = self.number(t("lead_label"), config["lead_minutes"], 0, 120, t("unit_minutes"))
         self.snooze = self.number(t("snooze_label"), config["snooze_minutes"], 1, 60, t("unit_minutes"))
-        self.sounds = alarm_sounds()
-        # Compared the way Windows does: C:\Windows and C:\WINDOWS are the same folder.
-        current = os.path.normcase(config["sound"])
-        if current not in map(os.path.normcase, self.sounds.values()):
-            self.sounds[Path(config["sound"]).name] = config["sound"]
-        chosen = next(name for name, path in self.sounds.items() if os.path.normcase(path) == current)
+        self.sounds, chosen = sound_choices(alarm_sounds(), config["sound"])
         extras = tk.Frame(self.grid, bg="white")
         self.sound = self.choice(t("sound_label"), list(self.sounds), chosen, extras)
-        button(extras, t("sound_preview"), self.preview, "link").pack(side="left")
+        button(extras, t("sound_preview"), lambda: self.preview(self.sounds[self.sound.get()]), "link").pack(side="left")
         button(extras, t("sound_browse"), self.browse, "link").pack(side="left")
         silences = [t("never") if minutes == 0 else t("minutes_value", minutes=minutes) for minutes in SILENCE_CHOICES]
         silence = SILENCE_CHOICES.index(config["silence_after_minutes"]) if config["silence_after_minutes"] in SILENCE_CHOICES else 0
         self.silence = self.choice(t("silence_label"), silences, silences[silence])
         self.ignore_free = self.checkbox(t("ignore_free"), config["ignore_free"])
+
+        self.section(t("section_slack"))
+        status = tk.Frame(self.grid, bg="white")
+        self.label(status, app.slack_status_text(), fg=COLOR_MUTED).pack(side="left")
+        button(status, t("slack_tokens_button"), app.ask_slack_tokens, "link").pack(side="left", padx=(8, 0))
+        self.place(t("slack_status_label"), status)
+        self.slack_enabled = self.checkbox(t("slack_enable"), config["slack_enabled"])
+        self.slack_delay = self.number(t("slack_delay_label"), config["slack_delay_minutes"], 1, 30, t("unit_minutes"))
+        self.slack_sounds, chosen = sound_choices(notification_sounds(), config["slack_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.slack_sound = self.choice(t("slack_sound_label"), list(self.slack_sounds), chosen, extras)
+        button(extras, t("sound_preview"), lambda: self.preview(self.slack_sounds[self.slack_sound.get()]), "link").pack(
+            side="left"
+        )
 
         self.section(t("section_agenda"))
         self.days = self.number(t("agenda_days_label"), config["agenda_days"], 1, 14, t("unit_days"))
@@ -838,10 +900,10 @@ class SettingsDialog(Dialog):
 
     # --- sound
 
-    def preview(self):
+    def preview(self, path):
         # Never over a real alarm: stopping the preview would silence it.
         if not self.app.sound_playing:
-            winsound.PlaySound(self.sounds[self.sound.get()], winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+            play_once(path)
 
     def browse(self):
         path = filedialog.askopenfilename(parent=self, filetypes=[(t("wav_files"), "*.wav")])
@@ -864,6 +926,9 @@ class SettingsDialog(Dialog):
             "show_all_day": self.show_all_day.get(),
             "language": self.languages[self.language.current()],
             "poll_seconds": POLL_CHOICES[self.poll.current()],
+            "slack_enabled": self.slack_enabled.get(),
+            "slack_delay_minutes": self.slack_delay(),
+            "slack_sound": self.slack_sounds[self.slack_sound.get()],
         }
         autostart = self.autostart.get()
         self.close()
@@ -873,6 +938,91 @@ class SettingsDialog(Dialog):
         if not self.app.sound_playing:
             winsound.PlaySound(None, winsound.SND_PURGE)
         super().close()
+
+
+class SlackTokensDialog(Dialog):
+    def __init__(self, app):
+        super().__init__(app, "slack", t("slack_tokens_title"), t("slack_tokens_help"))
+        grid = tk.Frame(self.frame, bg="white")
+        grid.pack(anchor="w")
+        self.app_token = self.field(grid, 0, t("app_token"), "", show="•")
+        self.user_token = self.field(grid, 1, t("user_token"), "", show="•")
+        self.buttons(t("test_and_save"), self.submit)
+        self.bind("<Return>", lambda _: self.submit())
+        self.app_token.focus_set()
+
+    def submit(self):
+        self.test(self.check, self.app_token.get().strip(), self.user_token.get().strip())
+
+    def check(self, app_token, user_token):
+        error = slack_alerts.check_tokens(app_token, user_token)
+        return t(f"slack_error_{error}") if error else None
+
+    def save(self, app_token, user_token):
+        self.app.save_slack_tokens(app_token, user_token)
+
+
+class SlackAlarmWindow(tk.Toplevel):
+    """One alarm for every message that concerns the user and is still unread."""
+
+    def __init__(self, app, key, messages, index):
+        super().__init__(app.root)
+        self.app = app
+        self.key = key
+        self.messages = messages
+        self.title(t("slack_alarm_title"))
+        self.configure(bg="white")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.protocol("WM_DELETE_WINDOW", self.stop)
+
+        tk.Frame(self, bg=COLOR_ACCENT, height=6).pack(fill="x")
+        footer = tk.Frame(self, bg=COLOR_PANEL, padx=26, pady=12)
+        footer.pack(side="bottom", fill="x")
+        frame = tk.Frame(self, bg="white", padx=26, pady=20)
+        frame.pack(fill="both", expand=True)
+        count = len(messages)
+        headline = t("slack_unread_one") if count == 1 else t("slack_unread_many", count=count)
+        tk.Label(frame, text=headline, font=(FONT, 18, "bold"), bg="white", fg=COLOR_TEXT).pack(anchor="w")
+        minutes = app.config["slack_delay_minutes"]
+        tk.Label(frame, text=t("slack_unread_since", minutes=minutes), font=(FONT, 10), bg="white", fg=COLOR_MUTED).pack(
+            anchor="w", pady=(2, 12)
+        )
+        for message in messages:
+            row = tk.Frame(frame, bg="white")
+            row.pack(anchor="w", fill="x", pady=2)
+            tk.Frame(row, bg=COLOR_ACCENT, width=4).pack(side="left", fill="y")
+            labels = tk.Frame(row, bg="white")
+            labels.pack(side="left", padx=(10, 0), pady=3)
+            tk.Label(labels, text=message.author, font=(FONT, 10, "bold"), bg="white", fg=COLOR_TEXT).pack(anchor="w")
+            tk.Label(labels, text=slack_place(message), font=(FONT, 9), bg="white", fg=COLOR_MUTED).pack(anchor="w")
+        # takefocus=0: a key typed elsewhere when the window pops up must not press a button.
+        button(footer, t("stop"), self.stop, takefocus=0, width=14).pack(side="right")
+        button(footer, t("open_slack"), self.open, "primary", takefocus=0, width=14).pack(side="right", padx=(0, 10))
+
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() - self.winfo_width()) // 2 + 30 * index
+        y = (self.winfo_screenheight() - self.winfo_height()) // 3 + 30 * index
+        self.geometry(f"+{x}+{y}")
+        self.lift()
+
+    def open(self):
+        self.app.open_slack(self.messages[0])
+        self.stop()
+
+    def stop(self):
+        self.app.close_window(self.key)
+
+
+def slack_place(message):
+    """Where a message was posted: "Direct message", "#channel", "Group conversation", plus "in a thread"."""
+    if message.kind == "dm":
+        place = t("slack_dm")
+    elif message.kind == "group-dm":
+        place = t("slack_group")
+    else:
+        place = message.conversation
+    return f"{place} · {t('slack_thread')}" if message.in_thread else place
 
 
 class AlarmWindow(tk.Toplevel):
@@ -1133,6 +1283,13 @@ class App:
         self.root.iconphoto(True, self.window_icon)
         self.tray = pystray.Icon(APP, self.icons[False], "Vigie", self.build_menu())
         self.fetcher = Fetcher(self)
+        # Slack: the connection, the messages waiting for their delay, and when to retry or re-check.
+        self.slack = None
+        self.slack_state = "off"
+        self.slack_group = None
+        self.slack_checking = False
+        self.slack_retry_at = 0.0
+        self.slack_recheck_at = 0.0
 
     # --- plumbing -------------------------------------------------------
 
@@ -1148,6 +1305,12 @@ class App:
         return pystray.Menu(
             pystray.MenuItem(lambda _: self.status_text(), None, enabled=False),
             pystray.MenuItem(lambda _: self.next_text(), None, enabled=False),
+            pystray.MenuItem(
+                lambda _: t("slack_menu_status", state=self.slack_status_text()),
+                None,
+                enabled=False,
+                visible=lambda _: self.config["slack_enabled"],
+            ),
             pystray.Menu.SEPARATOR,
             # Hidden: it gives a plain click on the icon its action, without a bold entry in the menu.
             pystray.MenuItem("agenda", lambda: self.post(self.show_agenda), default=True, visible=False),
@@ -1170,6 +1333,7 @@ class App:
         self.fetcher.start()
         if DEV:
             threading.Thread(target=watch_sources, args=(partial(self.post, self.restart),), daemon=True).start()
+        self.start_slack()
         if not self.config["accounts"]:
             self.show_accounts()
         self.root.after(TICK_MS, self.tick)
@@ -1177,6 +1341,7 @@ class App:
 
     def quit(self):
         self.set_sound(False)
+        self.stop_slack()
         self.tray.stop()
         self.root.destroy()
 
@@ -1211,6 +1376,124 @@ class App:
             self.set_language(language)
         else:
             self.save_config()
+        self.start_slack()
+        if self.config["slack_enabled"] and slack_tokens() is None:
+            self.ask_slack_tokens()
+
+    # --- Slack ----------------------------------------------------------
+
+    def background(self, work, done):
+        """Runs work() off the UI thread (network calls), then done(result) on it."""
+        threading.Thread(target=lambda: self.post(partial(done, work())), daemon=True).start()
+
+    def start_slack(self):
+        self.stop_slack()
+        tokens = slack_tokens()
+        if not self.config["slack_enabled"]:
+            self.slack_state = "off"
+            return
+        if tokens is None:
+            self.slack_state = "no_tokens"
+            return
+        watcher = SlackWatcher(*tokens, on_message=self.slack_received)
+        self.slack_state = "connecting"
+
+        def connect():
+            try:
+                watcher.start()
+                return watcher, None
+            except slack_alerts.SlackApiError as exc:
+                return watcher, exc.response.get("error", "refused")
+            except Exception as exc:
+                return watcher, repr(exc)
+
+        self.background(connect, self.slack_started)
+
+    def slack_started(self, result):
+        watcher, error = result
+        if error is None:
+            self.slack, self.slack_state = watcher, "connected"
+        elif error in ("invalid_auth", "token_revoked", "account_inactive", "not_authed"):
+            log.warning("slack: tokens refused (%s)", error)
+            self.slack_state = "no_tokens"
+            self.ask_slack_tokens()
+        else:
+            log.warning("slack: cannot connect: %s", error)
+            self.slack_state = "disconnected"
+            self.slack_retry_at = time.time() + 60
+        self.refresh_tray()
+
+    def stop_slack(self):
+        if self.slack is not None:
+            self.slack.stop()
+            self.slack = None
+
+    def slack_status_text(self):
+        state = self.slack_state
+        if state == "connected" and not (self.slack and self.slack.connected()):
+            state = "disconnected"
+        return t(f"slack_status_{state}")
+
+    def slack_received(self, message):
+        """Called by the Slack connection, off the UI thread: "Do not disturb" silences everything."""
+        if self.slack is not None and self.slack.do_not_disturb():
+            log.info("slack: do not disturb, message ignored")
+            return
+        self.post(partial(self.on_slack_message, message))
+
+    def on_slack_message(self, message):
+        if not self.sound_playing:
+            play_once(self.config["slack_sound"])
+        # The first unread message starts the delay; the next ones join it.
+        if self.slack_group is None:
+            deadline = datetime.now().astimezone() + timedelta(minutes=self.config["slack_delay_minutes"])
+            self.slack_group = {"deadline": deadline, "messages": []}
+        self.slack_group["messages"].append(message)
+
+    def slack_tick(self, now):
+        group = self.slack_group
+        if group and now >= group["deadline"] and not self.slack_checking and self.slack is not None:
+            self.slack_group = None
+            self.slack_checking = True
+            self.background(partial(self.slack.unseen, group["messages"]), self.slack_checked)
+        # While a Slack alarm is shown, it closes by itself once everything has been read.
+        if time.time() >= self.slack_recheck_at and self.slack is not None:
+            self.slack_recheck_at = time.time() + 30
+            for key, window in list(self.windows.items()):
+                if isinstance(window, SlackAlarmWindow):
+                    self.background(partial(self.slack.unseen, window.messages), partial(self.slack_rechecked, key))
+        if self.slack_state == "disconnected" and time.time() >= self.slack_retry_at:
+            self.start_slack()
+
+    def slack_checked(self, unseen):
+        self.slack_checking = False
+        if unseen:
+            self.ring_slack(unseen)
+
+    def slack_rechecked(self, key, unseen):
+        if not unseen and key in self.windows:
+            log.info("slack: messages read, alarm closed")
+            self.close_window(key)
+
+    def ring_slack(self, messages):
+        log.info("slack alarm: %d unread message(s)", len(messages))
+        key = f"slack:{messages[0].ts}"
+        self.windows[key] = SlackAlarmWindow(self, key, messages, len(self.windows))
+        self.ringing_since = datetime.now().astimezone()
+        self.set_sound(True)
+
+    def open_slack(self, message):
+        os.startfile(self.slack.link(message))
+
+    def ask_slack_tokens(self):
+        self.open("slack", lambda: SlackTokensDialog(self))
+
+    def save_slack_tokens(self, app_token, user_token):
+        set_slack_tokens(app_token, user_token)
+        self.config["slack_enabled"] = True
+        log.info("slack: tokens saved")
+        self.save_config()
+        self.start_slack()
 
     # --- accounts -------------------------------------------------------
 
@@ -1362,7 +1645,8 @@ class App:
 
         for key in [key for key, (_, event) in self.snoozed.items() if gone(event)]:
             del self.snoozed[key]
-        for key in [key for key, window in self.windows.items() if gone(window.event)]:
+        appointments = {key: window for key, window in self.windows.items() if isinstance(window, AlarmWindow)}
+        for key in [key for key, window in appointments.items() if gone(window.event)]:
             self.close_window(key)
 
         limit = (now - timedelta(days=2)).isoformat()
@@ -1414,6 +1698,8 @@ class App:
             if now >= ring_at:
                 del self.snoozed[key]
                 self.ring(event)
+
+        self.slack_tick(now)
 
         silence_after = self.config["silence_after_minutes"]
         if self.sound_playing and silence_after and now - self.ringing_since >= timedelta(minutes=silence_after):
@@ -1565,6 +1851,7 @@ def forget():
     """--forget: removes every saved secret (run by the uninstaller)."""
     for account in load_config()["accounts"]:
         delete_secret(account)
+    delete_slack_tokens()
 
 
 _instance_lock = None
