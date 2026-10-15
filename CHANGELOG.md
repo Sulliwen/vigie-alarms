@@ -11,6 +11,14 @@ Les versions suivent le [versionnage sémantique](https://semver.org/lang/fr/) :
 Le numéro est défini à un seul endroit, `__version__` dans `vigie.py`.
 Il est repris par l'installeur et affiché en bas de la fenêtre « Paramètres ».
 
+## En cours (non publié)
+
+Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
+
+- Le portrait de Vigie remplace l'icône du calendrier : programme, fenêtres et
+  zone de notification. Une pastille verte ou rouge dans le coin indique si les
+  agendas se synchronisent.
+
 ## 1.0.0 — 2026-10-13
 
 Première version de Vigie, reprise de Calendar Alarm 1.0.0 sous son propre nom.
