@@ -150,6 +150,16 @@ class AgendaDaysTest(unittest.TestCase):
         )
 
 
+class IconTest(unittest.TestCase):
+    def test_portrait_with_and_without_status_dot(self):
+        plain, ok, failing = vigie.make_icon(), vigie.make_icon(vigie.COLOR_OK), vigie.make_icon(vigie.COLOR_ERROR)
+        self.assertEqual(plain.size, (256, 256))
+        corner = (206, 206)
+        self.assertEqual(ok.getpixel(corner)[:3], (0x2E, 0x7D, 0x32))
+        self.assertEqual(failing.getpixel(corner)[:3], (0xC6, 0x28, 0x28))
+        self.assertNotIn(plain.getpixel(corner)[:3], (ok.getpixel(corner)[:3], failing.getpixel(corner)[:3]))
+
+
 class VersionTest(unittest.TestCase):
     def test_version_is_major_minor_patch(self):
         self.assertRegex(vigie.__version__, r"^\d+\.\d+\.\d+$")

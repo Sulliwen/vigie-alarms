@@ -7,8 +7,8 @@ $python = Join-Path $dir '.venv\Scripts\python.exe'
 $icon = Join-Path $dir 'build\Vigie.ico'
 New-Item -ItemType Directory -Force (Join-Path $dir 'build') | Out-Null
 Set-Location $dir
-& $python -c "import vigie as c; c.make_icon(c.COLOR_OK).save(r'$icon', sizes=[(s, s) for s in (16, 24, 32, 48, 64, 256)])"
-& $python -m PyInstaller --noconfirm --onedir --windowed --name Vigie --icon $icon `
+& $python -c "import vigie as c; c.make_icon().save(r'$icon', sizes=[(s, s) for s in (16, 24, 32, 48, 64, 256)])"
+& $python -m PyInstaller --noconfirm --onedir --windowed --name Vigie --icon $icon --add-data "$(Join-Path $dir 'assets\vigie.png');assets" `
     --collect-submodules caldav --collect-submodules icalendar --collect-submodules icalendar_searcher `
     --collect-submodules recurring_ical_events --collect-submodules x_wr_timezone --collect-submodules keyring `
     --collect-data icalendar --collect-data tzdata `

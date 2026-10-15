@@ -1050,13 +1050,18 @@ class AgendaWindow(tk.Toplevel):
         self.destroy()
 
 
-def make_icon(color):
-    # Drawn large: the same picture also makes the icon of the executable (build.ps1).
-    image = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((24, 32, 232, 232), 36, fill=color)
-    draw.rounded_rectangle((44, 96, 212, 212), 16, fill="white")
-    draw.ellipse((96, 120, 160, 184), fill=color)
+# The face of Vigie (assets/vigie.svg, rendered once to PNG). Bundled next to the program by build.ps1.
+PORTRAIT_PATH = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets" / "vigie.png"
+
+
+def make_icon(status_color=None):
+    """The portrait of Vigie; with a status colour, a dot in the corner tells whether calendars sync."""
+    image = Image.open(PORTRAIT_PATH).convert("RGBA").resize((256, 256), Image.LANCZOS)
+    if status_color:
+        draw = ImageDraw.Draw(image)
+        # Large enough to stay visible in the 16-pixel tray icon.
+        draw.ellipse((160, 160, 252, 252), fill="white")
+        draw.ellipse((172, 172, 240, 240), fill=status_color)
     return image
 
 
@@ -1094,7 +1099,7 @@ class App:
         self.root.withdraw()
         self.icons = {True: make_icon(COLOR_OK), False: make_icon(COLOR_ERROR)}
         # Kept on self: Tk only holds a weak reference to the picture of its windows.
-        self.window_icon = ImageTk.PhotoImage(self.icons[True].resize((64, 64)))
+        self.window_icon = ImageTk.PhotoImage(make_icon().resize((64, 64), Image.LANCZOS))
         self.root.iconphoto(True, self.window_icon)
         self.tray = pystray.Icon(APP, self.icons[False], "Vigie", self.build_menu())
         self.fetcher = Fetcher(self)
