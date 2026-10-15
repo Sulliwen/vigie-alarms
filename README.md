@@ -102,7 +102,12 @@ dossier (`vigie.log`).
 
 Python 3.12 ou plus récent, installé côté Windows.
 
+Pendant le développement, `dev.ps1` lance Vigie directement depuis le code, sans
+compiler ni installer ; elle redémarre d'elle-même à chaque modification de
+`vigie.py` ou `texts.py`.
+
 ```powershell
+powershell -ExecutionPolicy Bypass -File dev.ps1        # lancement depuis le code, redémarrage automatique
 powershell -ExecutionPolicy Bypass -File install.ps1    # venv, dépendances, lancement
 .venv\Scripts\python.exe -m unittest                    # tests
 powershell -ExecutionPolicy Bypass -File build.ps1      # produit l'installeur dans dist\ (Inno Setup 6 requis)

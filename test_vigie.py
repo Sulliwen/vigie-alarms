@@ -160,6 +160,38 @@ class IconTest(unittest.TestCase):
         self.assertNotIn(plain.getpixel(corner)[:3], (ok.getpixel(corner)[:3], failing.getpixel(corner)[:3]))
 
 
+class DevModeTest(unittest.TestCase):
+    def watch(self, sources, edit):
+        """Runs watch_sources until edit() has had time to be seen; returns how often it restarted."""
+        restarts, calls = [], []
+
+        def sleep(_):
+            calls.append(1)
+            if len(calls) == 1:
+                edit()
+            if restarts or len(calls) > 10:
+                raise StopIteration
+
+        with mock.patch("vigie.SOURCES", sources), mock.patch("vigie.time.sleep", side_effect=sleep):
+            with self.assertRaises(StopIteration):
+                vigie.watch_sources(lambda: restarts.append(1))
+        return len(restarts)
+
+    def test_restarts_when_a_source_changes_and_still_compiles(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "module.py"
+            source.write_text("x = 1\n")
+            def edit(text):
+                def write():
+                    source.write_text(text)
+                    later = source.stat().st_mtime + 5
+                    os.utime(source, (later, later))
+                return write
+            self.assertEqual(self.watch([source], edit("x = 2\n")), 1)
+            self.assertEqual(self.watch([source], edit("x = (\n")), 0)
+
+
 class VersionTest(unittest.TestCase):
     def test_version_is_major_minor_patch(self):
         self.assertRegex(vigie.__version__, r"^\d+\.\d+\.\d+$")

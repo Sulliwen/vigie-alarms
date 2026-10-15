@@ -14,8 +14,10 @@ import json
 import logging
 import logging.handlers
 import os
+import py_compile
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -51,6 +53,9 @@ from texts import PROVIDERS, t
 __version__ = "1.0.0"
 
 APP = "vigie"
+# --dev: run from the sources and restart by itself whenever they change.
+DEV = "--dev" in sys.argv
+SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py")]
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
@@ -196,7 +201,32 @@ def account_label(account):
 def launch_command():
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}"'
-    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"' + (" --dev" if DEV else "")
+
+
+def watch_sources(on_change, interval=1.0):
+    """--dev: calls on_change() when a source file changes and still compiles."""
+
+    def stamps():
+        return {path: path.stat().st_mtime for path in SOURCES if path.exists()}
+
+    known = stamps()
+    while True:
+        time.sleep(interval)
+        current = stamps()
+        if current == known:
+            continue
+        known = current
+        # Let the editor finish writing before reading the files.
+        time.sleep(interval / 2)
+        try:
+            for path in SOURCES:
+                py_compile.compile(str(path), doraise=True)
+        except py_compile.PyCompileError as exc:
+            # Restarting would only crash: keep the running version until the code is fixed.
+            log.warning("dev: sources do not compile, not restarting: %s", exc.msg)
+            continue
+        on_change()
 
 
 def autostart_command():
@@ -1138,6 +1168,8 @@ class App:
             set_autostart(True)
         self.tray.run_detached()
         self.fetcher.start()
+        if DEV:
+            threading.Thread(target=watch_sources, args=(partial(self.post, self.restart),), daemon=True).start()
         if not self.config["accounts"]:
             self.show_accounts()
         self.root.after(TICK_MS, self.tick)
@@ -1147,6 +1179,13 @@ class App:
         self.set_sound(False)
         self.tray.stop()
         self.root.destroy()
+
+    def restart(self):
+        """--dev: hands over to a fresh process running the modified sources."""
+        log.info("dev: sources changed, restarting")
+        release_single_instance()
+        subprocess.Popen([sys.executable, *sys.argv], cwd=Path(__file__).parent)
+        self.quit()
 
     def fetcher_wake(self):
         self.fetcher.wake.set()
@@ -1475,7 +1514,7 @@ class App:
         return t("next_event", time=f"{first.start:%H:%M}", title=first.summary)[:80]
 
     def refresh_tray(self):
-        self.tray.title = f"Vigie — {self.status_text()}"[:120]
+        self.tray.title = f"Vigie{' (dev)' if DEV else ''} — {self.status_text()}"[:120]
         self.tray.update_menu()
 
     def refresh_health(self):
@@ -1528,14 +1567,22 @@ def forget():
         delete_secret(account)
 
 
+_instance_lock = None
+
+
+def release_single_instance():
+    ctypes.windll.kernel32.CloseHandle(_instance_lock)
+
+
 def main():
+    global _instance_lock
     setup_logging()
     if "--forget" in sys.argv:
         return forget()
     if "--check" in sys.argv:
         sys.exit(check())
     # The handle is kept for the lifetime of the process: only one instance may run.
-    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, f"Local\\{APP}")
+    _instance_lock = ctypes.windll.kernel32.CreateMutexW(None, False, f"Local\\{APP}")
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
         log.info("already running, exiting")
         return
@@ -1543,11 +1590,10 @@ def main():
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
         pass
-    log.info("starting %s", __version__)
+    log.info("starting %s%s", __version__, " (dev)" if DEV else "")
     app = App()
     app.root.report_callback_exception = lambda *exc_info: log.error("Tk callback failed", exc_info=exc_info)
     app.run()
-    del mutex
 
 
 if __name__ == "__main__":

@@ -97,7 +97,12 @@ invitations you declined). The log is in the same folder
 
 Python 3.12 or later, installed on Windows.
 
+During development, `dev.ps1` runs Vigie straight from the sources, with no build
+and no installation; it restarts by itself whenever `vigie.py` or `texts.py`
+change.
+
 ```powershell
+powershell -ExecutionPolicy Bypass -File dev.ps1        # run from the sources, automatic restart
 powershell -ExecutionPolicy Bypass -File install.ps1    # venv, dependencies, launch
 .venv\Scripts\python.exe -m unittest                    # tests
 powershell -ExecutionPolicy Bypass -File build.ps1      # builds the installer in dist\ (requires Inno Setup 6)
