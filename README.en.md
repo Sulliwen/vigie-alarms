@@ -56,22 +56,35 @@ only once.
 
 ## Slack alerts
 
-Vigie can also watch Slack, only for **your direct messages** and the messages
-that **tag you personally** (channel, group conversation or thread). Nothing
-else ever rings: untagged messages, `@here`, `@channel`, user-group mentions,
-your own messages.
+Vigie can also watch Slack. Each **trigger** has its action: “Nothing”,
+“Sound”, “Alarm if unread” or “Sound + alarm if unread”:
 
-- A short sound for each message that concerns you.
-- If a message is still unread 5 minutes after the first one of a series,
-  **a single alarm** lists the unread messages, with “Open Slack”. It closes by
-  itself as soon as they are read.
-- Nothing during your Slack “Do not disturb” hours.
+| Trigger | Default |
+| --- | --- |
+| Direct message | Sound + alarm if unread |
+| @me mention (channel, group or thread) | Sound + alarm if unread |
+| Reply to one of your messages, in a thread | Nothing |
+| Any message of a group conversation | Nothing |
+| `@here`, `@channel` | Nothing |
+| Keywords (whole words, regardless of case) | Nothing |
+| Watched channels: every message | Nothing |
 
-**VIP people** (Settings → Slack, names separated by commas): all their messages
-are announced, wherever you are a member, even without a tag. A sound, then a
-voice says “VIP message”. They never trigger an alarm, and a series of messages
-is announced once a minute. Names are compared regardless of case and word
-order (“Jakez Rolland” also matches “Rolland Jakez”).
+When a message matches several triggers, the strongest action applies. Your own
+messages, edits and bots never trigger anything.
+
+- **Sound**: a short sound when the message arrives.
+- **Alarm if unread**: if a message is still unread 5 minutes after the first
+  one of a series, **a single alarm** lists the unread messages, with “Open
+  Slack”. It has its own sound and closes by itself as soon as they are read.
+- **When**: silent during Slack's “Do not disturb” (can be turned off), and if
+  you wish only between two hours and only Monday to Friday.
+
+**VIP people** (folding section of the Slack tab; unticked, no VIP treatment at
+all): all their messages are announced, wherever you are a member, even without
+a tag. A sound, then a voice says the chosen phrase (“VIP message” by default).
+They never trigger an alarm, and a series of messages is announced once a
+minute. Names are compared regardless of case and word order (“Jakez Rolland”
+also matches “Rolland Jakez”).
 
 Setting up, once: on <https://api.slack.com/apps>, “Create New App” → “From a
 manifest”, choose the workspace and paste:
@@ -122,18 +135,23 @@ shows up depends on the provider.
 
 Right-click on the icon → “Settings…”:
 
-- **Alarm**: delay before the appointment, length of a snooze, alarm sound
-  (those of Windows or a `.wav` file of your choice, with a button to listen to
-  it), automatic silence after a few minutes (the window stays), and an option
-  not to ring for appointments marked “Free”.
-- **Agenda**: number of days shown, whether all-day events are shown.
-- **General**: language, how often calendars are read again, starting with
-  Windows.
+- **General**: language, starting with Windows.
+- **Agenda** (appointments only):
+  - alert type: **alarm** (a window and a looping sound) or **ring** (one sound
+    and a Windows notification, no window);
+  - triggers: delay before the appointment, a second alert when it starts, how
+    late an appointment found late may still alert, “Free” appointments and
+    unanswered invitations to ignore;
+  - sound: alarm sound (those of Windows or a `.wav` file), length of a snooze,
+    automatic silence (the window stays);
+  - display and sync: days shown, all-day events, how often calendars are read
+    again.
+- **Slack**: connection, triggers, sound and alarm, hours, VIP people (see
+  [Slack alerts](#slack-alerts)).
 
-Settings are saved in `%LOCALAPPDATA%\vigie\config.json`. Two of them
-can only be changed in that file: `late_grace_minutes` (how late an appointment
-may still ring, 5 by default) and `my_emails` (addresses used to recognise the
-invitations you declined). The log is in the same folder
+Settings are saved in `%LOCALAPPDATA%\vigie\config.json`. `my_emails`
+(addresses used to recognise your invitations) can only be changed in that
+file. The log is in the same folder
 (`vigie.log`).
 
 ## From the sources

@@ -58,23 +58,38 @@ sonne qu'une fois.
 
 ## Alertes Slack
 
-Vigie peut aussi surveiller Slack, uniquement pour **vos messages privés** et les
-messages qui **vous taguent personnellement** (canal, conversation de groupe ou
-fil). Le reste ne sonne jamais : messages sans votre tag, `@here`, `@channel`,
-mentions d'un groupe, vos propres messages.
+Vigie peut aussi surveiller Slack. Chaque **déclencheur** a son action, au choix
+« Rien », « Son », « Alarme si non lu » ou « Son + alarme si non lu » :
 
-- Un son court à chaque message qui vous concerne.
-- Si un message n'est toujours pas lu 5 minutes après le premier d'une série,
-  **une seule alarme** liste les messages non lus, avec « Ouvrir Slack ». Elle
-  se ferme d'elle-même dès qu'ils sont lus.
-- Rien pendant vos horaires « Ne pas déranger » de Slack.
+| Déclencheur | Par défaut |
+| --- | --- |
+| Message privé | Son + alarme si non lu |
+| Mention @moi (canal, groupe ou fil) | Son + alarme si non lu |
+| Réponse à l'un de vos messages, dans un fil | Rien |
+| Tout message d'une conversation de groupe | Rien |
+| `@here`, `@channel` | Rien |
+| Mots-clés (mots entiers, sans tenir compte des majuscules) | Rien |
+| Canaux suivis : tous leurs messages | Rien |
 
-**Personnes VIP** (Paramètres → Slack, noms séparés par des virgules) : tous
-leurs messages sont annoncés, partout où vous êtes membre, même sans tag. Un son,
-puis une voix dit « Message VIP ». Il n'y a jamais d'alarme pour eux, et une
-série de messages n'est annoncée qu'une fois par minute. Le nom est comparé sans
-tenir compte des majuscules ni de l'ordre des mots (« Jakez Rolland » reconnaît
-aussi « Rolland Jakez »).
+Si un message correspond à plusieurs déclencheurs, l'action la plus forte
+s'applique. Vos propres messages, les modifications et les robots ne déclenchent
+jamais rien.
+
+- **Son** : un son court à l'arrivée du message.
+- **Alarme si non lu** : si un message n'est toujours pas lu 5 minutes après le
+  premier d'une série, **une seule alarme** liste les messages non lus, avec
+  « Ouvrir Slack ». Elle a sa propre sonnerie et se ferme d'elle-même dès qu'ils
+  sont lus.
+- **Quand** : silence pendant le « Ne pas déranger » de Slack (désactivable), et
+  au choix seulement entre deux heures et seulement du lundi au vendredi.
+
+**Personnes VIP** (section dépliable de l'onglet Slack ; décochée, aucun
+traitement VIP) : tous leurs messages sont annoncés, partout où vous êtes
+membre, même sans tag. Un son, puis une voix dit la phrase choisie (« Message
+VIP » par défaut). Il n'y a jamais d'alarme pour eux, et une série de messages
+n'est annoncée qu'une fois par minute. Le nom est comparé sans tenir compte des
+majuscules ni de l'ordre des mots (« Jakez Rolland » reconnaît aussi « Rolland
+Jakez »).
 
 Mise en place, une fois : sur <https://api.slack.com/apps>, « Create New App » →
 « From a manifest », choisir l'espace de travail et coller :
@@ -126,20 +141,23 @@ d'un nouveau rendez-vous dépend du fournisseur.
 
 Clic droit sur l'icône → « Paramètres… » :
 
-- **Alarme** : délai avant le rendez-vous, durée d'un rappel, sonnerie (celles
-  de Windows ou un fichier `.wav` de votre choix, avec un bouton pour
-  l'écouter), arrêt automatique du son après quelques minutes (la fenêtre
-  reste affichée), et possibilité de ne pas sonner pour les rendez-vous marqués
-  « Disponible ».
-- **Agenda** : nombre de jours affichés, affichage des événements « toute la
-  journée ».
-- **Général** : langue, fréquence de relecture des agendas, lancement au
-  démarrage de Windows.
+- **Général** : langue, lancement au démarrage de Windows.
+- **Agenda** (rendez-vous seulement) :
+  - type d'alerte : **alarme** (fenêtre et sonnerie en boucle) ou **sonnerie**
+    (un son et une notification Windows, sans fenêtre) ;
+  - déclenchement : délai avant le rendez-vous, deuxième alerte au début du
+    rendez-vous, retard toléré pour un rendez-vous découvert tard, rendez-vous
+    « Disponible » et invitations sans réponse à ignorer ;
+  - son : sonnerie (celles de Windows ou un fichier `.wav`), durée d'un rappel,
+    arrêt automatique du son (la fenêtre reste affichée) ;
+  - affichage et synchronisation : jours affichés, événements « toute la
+    journée », fréquence de relecture des agendas.
+- **Slack** : connexion, déclencheurs, son et alarme, horaires, personnes VIP
+  (voir [Alertes Slack](#alertes-slack)).
 
 Les réglages sont enregistrés dans `%LOCALAPPDATA%\vigie\config.json`.
-Deux d'entre eux ne se changent que dans ce fichier : `late_grace_minutes`
-(retard toléré pour sonner quand même, 5 par défaut) et `my_emails` (adresses
-servant à reconnaître vos invitations refusées). Le journal est dans le même
+`my_emails` (adresses servant à reconnaître vos invitations) ne se change que
+dans ce fichier. Le journal est dans le même
 dossier (`vigie.log`).
 
 ## Depuis les sources

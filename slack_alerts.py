@@ -1,16 +1,18 @@
-"""Slack side of Vigie: tells the program when a message concerns the user, and whether it has been read.
+"""Slack side of Vigie: tells the program which triggers a message matches, and whether it has been read.
 
-A message concerns the user when it is a direct message, or when it tags them personally (`<@id>`), in
-a channel, a group conversation or a thread. Nothing else does: untagged messages, @here, @channel,
-user-group mentions and the user's own messages stay silent.
+The triggers (TRIGGERS) are a direct message, a personal tag (`<@id>`), a reply to one of the user's
+messages, any message of a group conversation, @here / @channel, a keyword, or a message in a watched
+channel. What each one does (nothing, a sound, an alarm) is the program's business. The user's own
+messages, edits and bot messages never match.
 
-VIP people are the exception: every message they post where the user is a member is announced, tag or not.
+VIP people are apart: every message they post where the user is a member is passed on, tag or not.
 
 Messages arrive in real time through Socket Mode, so no public server is needed. Whether a message has
 been read comes from the conversation's last_read position.
 """
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -27,6 +29,8 @@ log = logging.getLogger("vigie")
 # A file sent in a DM, or a thread reply also posted to the channel, still concern the user.
 ALERT_SUBTYPES = {None, "file_share", "thread_broadcast"}
 DND_CACHE_SECONDS = 60
+TRIGGERS = ("dm", "mention", "reply", "group", "broadcast", "keyword", "channel")
+BROADCAST = re.compile(r"<!(here|channel|everyone)[>|]")
 
 
 @dataclass(frozen=True)
@@ -39,13 +43,36 @@ class SlackMessage:
     conversation: str
     in_thread: bool
     vip: bool = False
+    triggers: frozenset = frozenset()
 
 
-def concerns_me(event, me, kind):
-    """Whether a message event must ring: a direct message, or a personal tag; never the user's own."""
+def channel_key(name):
+    return name.strip().lstrip("#").lower()
+
+
+def has_keyword(text, keywords):
+    """Whether text holds one of the keywords as a whole word, ignoring case."""
+    words = [re.escape(keyword.strip()) for keyword in keywords if keyword.strip()]
+    return bool(words) and re.search(rf"(?<!\w)({'|'.join(words)})(?!\w)", text, re.IGNORECASE) is not None
+
+
+def triggers_of(event, me, kind, channel_name="", keywords=(), channels=()):
+    """The triggers a message event matches; none for the user's own messages, edits and bots."""
     if event.get("user") == me or event.get("subtype") not in ALERT_SUBTYPES:
-        return False
-    return kind == "dm" or f"<@{me}>" in (event.get("text") or "")
+        return frozenset()
+    text = event.get("text") or ""
+    in_thread = bool(event.get("thread_ts")) and event.get("thread_ts") != event.get("ts")
+    found = {
+        "dm": kind == "dm",
+        "mention": f"<@{me}>" in text,
+        "reply": in_thread and event.get("parent_user_id") == me,
+        "group": kind == "group-dm",
+        "broadcast": kind != "dm" and BROADCAST.search(text) is not None,
+        "keyword": has_keyword(text, keywords),
+        "channel": kind in ("channel", "private-channel")
+        and channel_key(channel_name) in {channel_key(name) for name in channels if name.strip()},
+    }
+    return frozenset(trigger for trigger, matched in found.items() if matched)
 
 
 def name_key(name):
@@ -72,7 +99,7 @@ def dnd_active(info, now):
 class SlackWatcher:
     """Listens to Slack for the user and hands the messages that concern them to on_message."""
 
-    def __init__(self, app_token, user_token, on_message, vip_names=()):
+    def __init__(self, app_token, user_token, on_message, vip_names=(), keywords=(), channels=()):
         self.web = WebClient(token=user_token)
         self.web.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=3))
         self.app_token = app_token
@@ -83,6 +110,8 @@ class SlackWatcher:
         self.kinds = {}
         self.profiles = {}
         self.vip_names = list(vip_names)
+        self.keywords = list(keywords)
+        self.channels = list(channels)
         self.dnd = (0.0, {})
         self.lock = threading.Lock()
 
@@ -115,7 +144,9 @@ class SlackWatcher:
         try:
             kind = self.kind_of(event["channel"])
             vip = bool(self.vip_names) and is_vip(event, self.me, self.profile_names(event.get("user")), self.vip_names)
-            if not vip and not concerns_me(event, self.me, kind):
+            name = self.kinds[event["channel"]][1]
+            triggers = triggers_of(event, self.me, kind, name, self.keywords, self.channels)
+            if not vip and not triggers:
                 return
             message = SlackMessage(
                 channel=event["channel"],
@@ -125,11 +156,11 @@ class SlackWatcher:
                 conversation=self.conversation_name(event["channel"], kind),
                 in_thread=bool(event.get("thread_ts")) and event.get("thread_ts") != event.get("ts"),
                 vip=vip,
+                triggers=triggers,
             )
         except Exception:
             log.exception("slack: could not read an incoming message")
             return
-        log.info("slack: %s message (%s%s)", "VIP" if vip else "my", kind, ", thread" if message.in_thread else "")
         self.on_message(message)
 
     def info(self, channel):

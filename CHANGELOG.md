@@ -24,6 +24,17 @@ Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
   déranger » de Slack ; réglages dans Paramètres → Slack.
 - Personnes VIP sur Slack : tous leurs messages, même sans tag, sont annoncés
   par un son puis une voix « Message VIP », sans alarme.
+- Paramètres en trois onglets : Général, Agenda (rendez-vous seulement) et
+  Slack (Slack seulement).
+- Agenda : choix entre alarme (fenêtre) et sonnerie (son et notification),
+  deuxième alerte au début du rendez-vous, retard toléré réglable, invitations
+  sans réponse à ignorer.
+- Slack : une action par déclencheur (rien, son, alarme si non lu, ou les
+  deux) pour les messages privés, les mentions, les réponses à vos messages,
+  les conversations de groupe, `@here`/`@channel`, des mots-clés et des canaux
+  suivis ; sonnerie d'alarme et coupure du son propres à Slack ; horaires et
+  jours d'alerte ; « Ne pas déranger » désactivable ; section VIP dépliable,
+  désactivable, avec phrase et voix au choix.
 - Mode développement (`dev.ps1`) : lancement depuis le code, redémarrage
   automatique à chaque modification.
 

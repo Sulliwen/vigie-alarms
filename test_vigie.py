@@ -101,6 +101,10 @@ class ExtractEventsTest(unittest.TestCase):
         self.assertTrue(events["timed"].free)
         self.assertFalse(events["accepted"].free)
 
+    def test_unanswered_invitations_are_flagged(self):
+        self.assertTrue(self.events["accepted"].unanswered)
+        self.assertFalse(self.events["timed"].unanswered)
+
     def test_key_changes_when_the_event_moves(self):
         moved = extract_events(components(ICS.replace("20261013T120000Z", "20261013T121500Z")), "Perso", set())
         self.assertNotEqual(moved[0].key, self.events["timed"].key)
@@ -196,22 +200,34 @@ class DevModeTest(unittest.TestCase):
 class SlackRulesTest(unittest.TestCase):
     me = "UME"
 
-    def concerns(self, kind, **event):
-        return slack_alerts.concerns_me({"user": "UOTHER", "text": "hello", **event}, self.me, kind)
+    def triggers(self, kind, name="", keywords=(), channels=(), **event):
+        event = {"user": "UOTHER", "text": "hello", "ts": "2.0", **event}
+        return set(slack_alerts.triggers_of(event, self.me, kind, name, keywords, channels))
 
-    def test_only_direct_messages_and_personal_tags_ring(self):
-        self.assertTrue(self.concerns("dm"))
-        self.assertTrue(self.concerns("dm", subtype="file_share"))
-        for kind in ("channel", "private-channel", "group-dm"):
-            self.assertTrue(self.concerns(kind, text="<@UME> can you check?"), kind)
-            self.assertFalse(self.concerns(kind), kind)
-            self.assertFalse(self.concerns(kind, text="<!here> <!channel> <!subteam^S1>"), kind)
-        self.assertTrue(self.concerns("channel", text="<@UME>", thread_ts="1.0", ts="2.0"))
+    def test_each_trigger_is_recognised(self):
+        self.assertEqual(self.triggers("dm"), {"dm"})
+        self.assertEqual(self.triggers("dm", subtype="file_share"), {"dm"})
+        self.assertEqual(self.triggers("group-dm"), {"group"})
+        self.assertEqual(self.triggers("channel", text="<@UME> can you check?"), {"mention"})
+        self.assertEqual(self.triggers("channel", text="<@UME>", thread_ts="1.0"), {"mention"})
+        self.assertEqual(self.triggers("channel", thread_ts="1.0", parent_user_id="UME"), {"reply"})
+        self.assertEqual(self.triggers("channel", thread_ts="1.0", parent_user_id="UOTHER"), set())
+        self.assertEqual(self.triggers("channel", text="<!here> look"), {"broadcast"})
+        self.assertEqual(self.triggers("private-channel", text="<!channel|channel>"), {"broadcast"})
+        self.assertEqual(self.triggers("channel", text="<!subteam^S1> hi"), set())
+        self.assertEqual(self.triggers("channel"), set())
 
-    def test_own_messages_edits_and_bots_never_ring(self):
-        self.assertFalse(self.concerns("dm", user="UME", text="<@UME>"))
-        self.assertFalse(self.concerns("dm", subtype="message_changed"))
-        self.assertFalse(self.concerns("dm", subtype="bot_message"))
+    def test_keywords_are_whole_words_and_channels_ignore_the_hash(self):
+        self.assertEqual(self.triggers("channel", text="Prod is down", keywords=["prod"]), {"keyword"})
+        self.assertEqual(self.triggers("channel", text="product launch", keywords=["prod"]), set())
+        self.assertEqual(self.triggers("channel", text="x", keywords=["", " "]), set())
+        self.assertEqual(self.triggers("channel", name="Alertes-Prod", channels=["#alertes-prod"]), {"channel"})
+        self.assertEqual(self.triggers("group-dm", name="", channels=["#alertes-prod"]), {"group"})
+
+    def test_own_messages_edits_and_bots_never_match(self):
+        self.assertEqual(self.triggers("dm", user="UME", text="<@UME>"), set())
+        self.assertEqual(self.triggers("dm", subtype="message_changed"), set())
+        self.assertEqual(self.triggers("dm", subtype="bot_message"), set())
 
     def test_vip_people_are_matched_by_any_name_in_any_word_order(self):
         names = ["Jakez", "Jakez Rolland"]
@@ -294,6 +310,16 @@ class TextsTest(unittest.TestCase):
 
 
 class ConfigTest(unittest.TestCase):
+    def test_older_files_keep_their_vip_people_and_get_the_new_triggers(self):
+        stored = {"slack_vip_names": ["Jakez"], "slack_actions": {"dm": "sound"}}
+        with mock.patch("vigie.load_json", return_value=stored):
+            config = vigie.load_config()
+        self.assertTrue(config["slack_vip_enabled"])
+        self.assertEqual(config["slack_actions"]["dm"], "sound")
+        self.assertEqual(config["slack_actions"]["mention"], "sound_alarm")
+        with mock.patch("vigie.load_json", return_value={}):
+            self.assertFalse(vigie.load_config()["slack_vip_enabled"])
+
     def test_forget_also_removes_the_slack_tokens(self):
         with (
             mock.patch("vigie.load_json", return_value={"accounts": [{"id": "a1"}]}),
@@ -313,7 +339,7 @@ class AppTest(unittest.TestCase):
     """Drives the real windows, with the sound, the tray and the vault mocked out."""
 
     def setUp(self):
-        for target in ("winsound.PlaySound", "keyring", "save_json"):
+        for target in ("winsound.PlaySound", "keyring", "save_json", "pystray.Icon"):
             patcher = mock.patch(f"vigie.{target}")
             setattr(self, target.split(".")[-1], patcher.start())
             self.addCleanup(patcher.stop)
@@ -545,9 +571,10 @@ class AppTest(unittest.TestCase):
     def test_out_of_range_numbers_are_brought_back(self):
         self.app.show_settings()
         dialog = self.app.dialogs["settings"]
+        agenda = dialog.nametowidget(dialog.notebook.tabs()[1])
         entry = [
             control
-            for cell in dialog.grid.winfo_children()
+            for cell in agenda.winfo_children()[0].winfo_children()
             for control in cell.winfo_children()
             if isinstance(control, vigie.tk.Spinbox)
         ][0]
@@ -555,6 +582,39 @@ class AppTest(unittest.TestCase):
             entry.delete(0, "end")
             entry.insert(0, typed)
             self.assertEqual(dialog.lead(), kept)
+
+    def test_ring_mode_notifies_once_without_a_window(self):
+        self.app.config["alert_mode"] = "ring"
+        self.app.on_events("a", [event("soon", self.now + timedelta(minutes=4))])
+        with mock.patch("vigie.play_once"):
+            self.tick()
+            self.tick()
+        self.assertFalse(self.app.windows)
+        self.assertFalse(self.app.sound_playing)
+        self.app.tray.notify.assert_called_once()
+        self.assertIn("soon", self.app.acked)
+
+    def test_a_second_alert_when_the_appointment_starts(self):
+        self.app.config["alert_at_start"] = True
+        soon = event("soon", self.now + timedelta(minutes=4))
+        self.app.on_events("a", [soon])
+        self.tick()
+        self.app.windows["soon"].stop()
+        self.tick()
+        self.assertFalse(self.app.windows)
+        started = event("soon", self.now - timedelta(seconds=30))
+        self.app.acked["soon"] = started.start.isoformat()
+        self.app.on_events("a", [started])
+        self.tick()
+        self.assertEqual(list(self.app.windows), ["soon" + vigie.START_SUFFIX])
+
+    def test_free_and_unanswered_appointments_can_stay_silent(self):
+        free = vigie.replace(event("free", self.now), free=True)
+        unanswered = vigie.replace(event("invite", self.now), unanswered=True)
+        config = {**self.app.config, "ignore_free": True, "ignore_unanswered": True}
+        self.assertEqual(vigie.ringable_events([free, unanswered], config), [])
+        config.update(ignore_free=False, ignore_unanswered=False)
+        self.assertEqual(vigie.ringable_events([free, unanswered], config), [free, unanswered])
 
     def test_sound_stops_by_itself_but_the_window_stays(self):
         self.app.config["silence_after_minutes"] = 2
@@ -586,8 +646,9 @@ class AppTest(unittest.TestCase):
 
     # --- slack
 
-    def slack_message(self, ts, kind="dm", author="Ana"):
-        return slack_alerts.SlackMessage(f"D{kind}", ts, author, kind, "#dev" if "channel" in kind else "", False)
+    def slack_message(self, ts, kind="dm", author="Ana", triggers=("dm",)):
+        conversation = "#dev" if "channel" in kind else ""
+        return slack_alerts.SlackMessage(f"D{kind}", ts, author, kind, conversation, False, triggers=frozenset(triggers))
 
     def connect_slack(self, unseen):
         self.app.slack = mock.Mock(**{"unseen.side_effect": unseen, "do_not_disturb.return_value": False})
@@ -597,7 +658,8 @@ class AppTest(unittest.TestCase):
 
     def test_one_alarm_for_the_messages_still_unread_after_the_delay(self):
         self.connect_slack(unseen=lambda messages: messages[1:])
-        first, second = self.slack_message("100.0"), self.slack_message("101.0", kind="channel", author="Yann")
+        first = self.slack_message("100.0")
+        second = self.slack_message("101.0", kind="channel", author="Yann", triggers=("mention",))
         with mock.patch("vigie.play_once") as play_once:
             self.app.on_slack_message(first)
             self.app.on_slack_message(second)
@@ -653,8 +715,59 @@ class AppTest(unittest.TestCase):
         self.app.on_events("a", [])
         self.assertEqual(len(self.app.windows), 1)
 
+    def test_each_trigger_does_what_its_action_says(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        self.app.config["slack_actions"] = {**self.app.config["slack_actions"], "group": "sound", "keyword": "alarm"}
+        with mock.patch("vigie.play_once") as play_once:
+            self.app.on_slack_message(self.slack_message("100.0", kind="group-dm", triggers=("group",)))
+            self.assertEqual(play_once.call_count, 1)
+            self.assertIsNone(self.app.slack_group)
+            self.app.on_slack_message(self.slack_message("101.0", kind="channel", triggers=("keyword",)))
+            self.assertEqual(play_once.call_count, 1)
+            self.assertEqual(len(self.app.slack_group["messages"]), 1)
+            self.app.on_slack_message(self.slack_message("102.0", kind="channel", triggers=("broadcast",)))
+            # Several triggers: the strongest action wins.
+            self.app.on_slack_message(self.slack_message("103.0", kind="group-dm", triggers=("group", "keyword")))
+        self.assertEqual(play_once.call_count, 2)
+        self.assertEqual([m.ts for m in self.app.slack_group["messages"]], ["101.0", "103.0"])
+
+    def test_slack_stays_quiet_outside_the_alert_hours(self):
+        config = {**self.app.config, "slack_hours_only": True, "slack_hours": [8, 19], "slack_weekdays_only": True}
+        monday, saturday = datetime(2026, 10, 12), datetime(2026, 10, 17)
+        self.assertTrue(vigie.slack_hours_open(config, monday.replace(hour=8)))
+        self.assertFalse(vigie.slack_hours_open(config, monday.replace(hour=19)))
+        self.assertFalse(vigie.slack_hours_open(config, saturday.replace(hour=10)))
+        self.assertTrue(vigie.slack_hours_open({**config, "slack_hours": [22, 6]}, monday.replace(hour=2)))
+        self.assertTrue(vigie.slack_hours_open({**config, "slack_hours_only": False}, monday.replace(hour=23)))
+        self.connect_slack(unseen=lambda messages: messages)
+        self.app.config.update(slack_hours_only=True, slack_hours=[0, 0])
+        self.app.slack_received(self.slack_message("100.0"))
+        self.assertTrue(self.app.inbox.empty())
+
+    def test_do_not_disturb_can_be_ignored(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        self.app.slack.do_not_disturb.return_value = True
+        self.app.config["slack_respect_dnd"] = False
+        self.app.slack_received(self.slack_message("100.0"))
+        self.assertFalse(self.app.inbox.empty())
+
+    def test_a_slack_alarm_rings_with_its_own_sound(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        self.app.config["slack_alarm_sound"] = __file__
+        self.app.ring_slack([self.slack_message("100.0")])
+        self.assertEqual(self.PlaySound.call_args.args[0], __file__)
+
+    def test_no_vip_treatment_when_turned_off(self):
+        self.connect_slack(unseen=lambda messages: messages)
+        vip = slack_alerts.SlackMessage("Ddm", "100.0", "Jakez", "dm", "", False, vip=True, triggers=frozenset({"dm"}))
+        with mock.patch("vigie.announce") as announce, mock.patch("vigie.play_once"):
+            self.app.on_slack_message(vip)
+        announce.assert_not_called()
+        self.assertEqual(len(self.app.slack_group["messages"]), 1)
+
     def test_a_vip_message_is_announced_once_a_minute_and_never_rings(self):
         self.connect_slack(unseen=lambda messages: messages)
+        self.app.config["slack_vip_enabled"] = True
         vip = slack_alerts.SlackMessage("Ddm", "100.0", "Jakez", "dm", "", False, vip=True)
         with mock.patch("vigie.announce") as announce, mock.patch("vigie.play_once") as play_once:
             self.app.on_slack_message(vip)
@@ -681,6 +794,11 @@ class AppTest(unittest.TestCase):
         dialog.slack_enabled.set(True)
         dialog.slack_delay = lambda: 3
         dialog.slack_vip.insert(0, "Jakez, Jakez Rolland ,")
+        dialog.slack_vip_enabled.set(True)
+        dialog.slack_actions["group"].current(vigie.SLACK_ACTIONS.index("sound"))
+        dialog.slack_lists["channel"].insert(0, "#alertes-prod, dev")
+        dialog.slack_lists["keyword"].insert(0, "urgent")
+        dialog.alert_mode.set("ring")
         with (
             mock.patch("vigie.autostart_command", return_value=None),
             mock.patch.object(self.app, "start_slack"),
@@ -689,6 +807,13 @@ class AppTest(unittest.TestCase):
         self.assertEqual((self.app.config["slack_enabled"], self.app.config["slack_delay_minutes"]), (True, 3))
         self.assertTrue(self.app.config["slack_sound"].lower().endswith(".wav"))
         self.assertEqual(self.app.config["slack_vip_names"], ["Jakez", "Jakez Rolland"])
+        self.assertTrue(self.app.config["slack_vip_enabled"])
+        self.assertIsNone(self.app.config["slack_vip_phrase"])
+        self.assertEqual(self.app.config["slack_actions"]["group"], "sound")
+        self.assertEqual(self.app.config["slack_actions"]["dm"], "sound_alarm")
+        self.assertEqual(self.app.config["slack_channels"], ["alertes-prod", "dev"])
+        self.assertEqual(self.app.config["slack_keywords"], ["urgent"])
+        self.assertEqual(self.app.config["alert_mode"], "ring")
         self.assertTrue(self.app.config["slack_vip_sound"].lower().endswith(".wav"))
 
     # --- agenda

@@ -29,7 +29,7 @@ import urllib.request
 import uuid
 import winreg
 import winsound
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time as clock, timedelta
 from functools import partial
 from pathlib import Path
@@ -71,23 +71,51 @@ DEFAULT_CONFIG = {
     "accounts": [],
     # "fr" or "en"; None follows the language of Windows.
     "language": None,
+    # "alarm": a window and a looping sound until stopped; "ring": one sound and a Windows notification.
+    "alert_mode": "alarm",
     "lead_minutes": 10,
+    # A second alert when the appointment starts.
+    "alert_at_start": False,
     "snooze_minutes": 5,
     # The sound stops by itself after this many minutes, the window stays; 0 means never.
     "silence_after_minutes": 0,
     # Appointments marked "free" (shown as available) are displayed but do not ring.
     "ignore_free": False,
+    # Invitations the user has not answered yet (accepted, declined or maybe) do not ring.
+    "ignore_unanswered": False,
     # Days read ahead, today included: the alarms need the next minutes, the agenda window the rest.
     "agenda_days": 7,
     "show_all_day": True,
-    # Slack: a short sound for each message that concerns the user, then one alarm for whatever is
-    # still unread this many minutes after the first one.
+    # Slack: what each trigger does (SLACK_ACTIONS). A sound plays on arrival; one alarm gathers what is
+    # still unread this many minutes after the first message.
     "slack_enabled": False,
+    "slack_actions": {
+        "dm": "sound_alarm",
+        "mention": "sound_alarm",
+        "reply": "none",
+        "group": "none",
+        "broadcast": "none",
+        "keyword": "none",
+        "channel": "none",
+    },
+    "slack_keywords": [],
+    "slack_channels": [],
     "slack_delay_minutes": 5,
     "slack_sound": r"C:\Windows\Media\Windows Notify Messaging.wav",
-    # Everything these people post is announced (a sound, then a voice), with no alarm.
+    "slack_alarm_sound": r"C:\Windows\Media\Alarm01.wav",
+    "slack_silence_after_minutes": 0,
+    "slack_respect_dnd": True,
+    # Outside these hours, or on a weekend when asked, Slack stays silent.
+    "slack_hours_only": False,
+    "slack_hours": [8, 19],
+    "slack_weekdays_only": False,
+    # Everything these people post is announced (a sound, then a voice), never an alarm.
+    "slack_vip_enabled": False,
     "slack_vip_names": [],
     "slack_vip_sound": r"C:\Windows\Media\Windows Notify Email.wav",
+    "slack_vip_voice": True,
+    # None: the phrase of the interface language.
+    "slack_vip_phrase": None,
     # An event found after it started still rings during this many minutes.
     "late_grace_minutes": 5,
     "poll_seconds": 60,
@@ -97,6 +125,8 @@ DEFAULT_CONFIG = {
 }
 
 SILENCE_CHOICES = [0, 1, 2, 5, 10]
+SLACK_ACTIONS = ("none", "sound", "alarm", "sound_alarm")
+START_SUFFIX = "|start"
 POLL_CHOICES = [60, 120, 300]
 RETRY_SECONDS = 15
 VIP_QUIET_SECONDS = 60
@@ -134,6 +164,8 @@ class Event:
     all_day: bool = False
     # Marked as "free" by its owner: it does not block the time slot.
     free: bool = False
+    # An invitation the user has not answered yet.
+    unanswered: bool = False
 
 
 class Refused(Exception):
@@ -211,7 +243,14 @@ def delete_slack_tokens():
 
 
 def load_config():
-    return {**copy.deepcopy(DEFAULT_CONFIG), **load_json(CONFIG_PATH, {})}
+    stored = load_json(CONFIG_PATH, {})
+    config = {**copy.deepcopy(DEFAULT_CONFIG), **stored}
+    # New triggers keep their default when an older file lists only some of them.
+    config["slack_actions"] = {**DEFAULT_CONFIG["slack_actions"], **stored.get("slack_actions", {})}
+    # Before the switch existed, listing names was enough to turn VIP announcements on.
+    if "slack_vip_enabled" not in stored and stored.get("slack_vip_names"):
+        config["slack_vip_enabled"] = True
+    return config
 
 
 def provider_of(account):
@@ -286,15 +325,16 @@ def set_autostart(enabled):
 # --- reading calendars ------------------------------------------------------
 
 
-def is_declined(component, my_addresses):
+def my_answer(component, my_addresses):
+    """The user's answer to an invitation (ACCEPTED, DECLINED, NEEDS-ACTION...), "" when not invited."""
     attendees = component.get("ATTENDEE") or []
     if not isinstance(attendees, list):
         attendees = [attendees]
     for attendee in attendees:
         address = str(attendee).lower().removeprefix("mailto:")
-        if address in my_addresses and str(attendee.params.get("PARTSTAT", "")).upper() == "DECLINED":
-            return True
-    return False
+        if address in my_addresses:
+            return str(attendee.params.get("PARTSTAT", "NEEDS-ACTION")).upper()
+    return ""
 
 
 def extract_events(components, calendar_name, my_addresses):
@@ -312,7 +352,8 @@ def extract_events(components, calendar_name, my_addresses):
             continue
         if str(component.get("STATUS", "")).upper() == "CANCELLED":
             continue
-        if is_declined(component, my_addresses):
+        answer = my_answer(component, my_addresses)
+        if answer == "DECLINED":
             continue
         all_day = not isinstance(dtstart.dt, datetime)
         start = local(dtstart.dt)
@@ -333,9 +374,40 @@ def extract_events(components, calendar_name, my_addresses):
                 calendar=calendar_name,
                 all_day=all_day,
                 free=str(component.get("TRANSP", "")).upper() == "TRANSPARENT",
+                unanswered=answer == "NEEDS-ACTION",
             )
         )
     return events
+
+
+def ringable_events(events, config):
+    """The events allowed to ring: maybe not the "free" ones, maybe not the unanswered invitations."""
+    return [
+        event
+        for event in events
+        if not (event.free and config["ignore_free"]) and not (event.unanswered and config["ignore_unanswered"])
+    ]
+
+
+def slack_action(actions, triggers):
+    """(sound, alarm) for a message: the strongest of what its triggers ask."""
+    chosen = [actions.get(trigger, "none") for trigger in triggers]
+    return any("sound" in action for action in chosen), any("alarm" in action for action in chosen)
+
+
+def slack_hours_open(config, now):
+    """Whether Slack may make a noise now, given the alert hours and days."""
+    if config["slack_weekdays_only"] and now.weekday() >= 5:
+        return False
+    if not config["slack_hours_only"]:
+        return True
+    start, end = config["slack_hours"]
+    # 22 to 6 runs over midnight.
+    return start <= now.hour < end if start <= end else (now.hour >= start or now.hour < end)
+
+
+def vip_phrase(config):
+    return config["slack_vip_phrase"] or t("slack_vip_voice")
 
 
 def due_events(events, handled, now, lead, grace):
@@ -456,7 +528,8 @@ def announce(sound, text, with_sound=True):
         try:
             if with_sound:
                 winsound.PlaySound(sound, winsound.SND_FILENAME | winsound.SND_NODEFAULT)
-            speak(text)
+            if text:
+                speak(text)
         except Exception:
             log.exception("announce failed")
 
@@ -831,70 +904,170 @@ class AccountsDialog(Dialog):
 
 
 class SettingsDialog(Dialog):
+    """Three tabs: General, Agenda (appointments only) and Slack (Slack only)."""
+
     def __init__(self, app):
         super().__init__(app, "settings", t("title_settings"), t("settings_intro"))
-        config = app.config
-        self.grid = tk.Frame(self.frame, bg="white")
-        self.grid.pack(anchor="w")
+        style = ttk.Style(self)
+        style.configure("Settings.TNotebook", background="white", borderwidth=0)
+        style.configure("Settings.TNotebook.Tab", padding=(16, 5), font=(FONT, 10))
+        self.notebook = ttk.Notebook(self.frame, style="Settings.TNotebook")
+        self.notebook.pack(fill="both", expand=True)
+        self.build_general(app.config)
+        self.build_agenda(app.config)
+        self.build_slack(app.config)
+
+        self.label(self.footer, f"Vigie {__version__}", font=(FONT, 9), fg=COLOR_MUTED).pack(side="left")
+        button(self.footer, t("cancel"), self.close).pack(side="right")
+        button(self.footer, t("save"), self.submit, "primary").pack(side="right", padx=(0, 8))
+
+    def tab(self, title):
+        page = tk.Frame(self.notebook, bg="white", padx=16, pady=12)
+        self.notebook.add(page, text=title)
+        self.grid = tk.Frame(page, bg="white")
+        self.grid.pack(anchor="nw")
         self.next_row = 0
 
-        self.section(t("section_alarm"))
-        self.lead = self.number(t("lead_label"), config["lead_minutes"], 0, 120, t("unit_minutes"))
-        self.snooze = self.number(t("snooze_label"), config["snooze_minutes"], 1, 60, t("unit_minutes"))
+    def column(self, index):
+        """Starts a new column of settings in the current tab (the Slack tab has two)."""
+        page = self.grid if index == 0 else self.columns
+        if index == 0:
+            self.columns = page
+        self.grid = tk.Frame(page, bg="white")
+        self.grid.grid(row=0, column=index, sticky="nw", padx=(0 if index == 0 else 36, 0))
+        self.next_row = 0
+
+    def build_general(self, config):
+        self.tab(t("tab_general"))
+        self.section(t("section_interface"))
+        self.languages = [None, *texts.LANGUAGES]
+        languages = [t("language_auto"), *texts.LANGUAGES.values()]
+        self.language = self.choice(t("language"), languages, languages[self.languages.index(config["language"])])
+        self.section(t("section_startup"))
+        self.autostart = self.checkbox(t("autostart"), autostart_command() is not None)
+
+    def build_agenda(self, config):
+        self.tab(t("tab_agenda"))
+        self.section(t("section_alert_mode"))
+        self.alert_mode = tk.StringVar(self, value=config["alert_mode"])
+        for mode in ("alarm", "ring"):
+            self.radio(t(f"alert_mode_{mode}"), self.alert_mode, mode)
+
+        self.section(t("section_triggers"))
+        self.lead = self.number(t("lead_label"), config["lead_minutes"], 0, 120, t("unit_minutes_before"))
+        self.alert_at_start = self.checkbox(t("alert_at_start"), config["alert_at_start"])
+        self.late_grace = self.number(t("late_grace_label"), config["late_grace_minutes"], 0, 60, t("unit_minutes_after"))
+        self.ignore_free = self.checkbox(t("ignore_free"), config["ignore_free"])
+        self.ignore_unanswered = self.checkbox(t("ignore_unanswered"), config["ignore_unanswered"])
+
+        self.section(t("section_sound"))
         self.sounds, chosen = sound_choices(alarm_sounds(), config["sound"])
         extras = tk.Frame(self.grid, bg="white")
         self.sound = self.choice(t("sound_label"), list(self.sounds), chosen, extras)
         button(extras, t("sound_preview"), lambda: self.preview(self.sounds[self.sound.get()]), "link").pack(side="left")
         button(extras, t("sound_browse"), self.browse, "link").pack(side="left")
-        silences = [t("never") if minutes == 0 else t("minutes_value", minutes=minutes) for minutes in SILENCE_CHOICES]
-        silence = SILENCE_CHOICES.index(config["silence_after_minutes"]) if config["silence_after_minutes"] in SILENCE_CHOICES else 0
-        self.silence = self.choice(t("silence_label"), silences, silences[silence])
-        self.ignore_free = self.checkbox(t("ignore_free"), config["ignore_free"])
+        self.snooze = self.number(t("snooze_label"), config["snooze_minutes"], 1, 60, t("unit_minutes"))
+        self.silence = self.silence_choice(config["silence_after_minutes"])
 
-        self.section(t("section_slack"))
-        status = tk.Frame(self.grid, bg="white")
-        self.label(status, app.slack_status_text(), fg=COLOR_MUTED).pack(side="left")
-        button(status, t("slack_tokens_button"), app.ask_slack_tokens, "link").pack(side="left", padx=(8, 0))
-        self.place(t("slack_status_label"), status)
-        self.slack_enabled = self.checkbox(t("slack_enable"), config["slack_enabled"])
-        self.slack_delay = self.number(t("slack_delay_label"), config["slack_delay_minutes"], 1, 30, t("unit_minutes"))
-        self.slack_sounds, chosen = sound_choices(notification_sounds(), config["slack_sound"])
-        extras = tk.Frame(self.grid, bg="white")
-        self.slack_sound = self.choice(t("slack_sound_label"), list(self.slack_sounds), chosen, extras)
-        button(extras, t("sound_preview"), lambda: self.preview(self.slack_sounds[self.slack_sound.get()]), "link").pack(
-            side="left"
-        )
-        self.slack_vip = tk.Entry(
-            self.grid, font=(FONT, 10), width=30, relief="flat",
-            highlightthickness=1, highlightbackground="#c4c7cc", highlightcolor=COLOR_ACCENT,
-        )
-        self.slack_vip.insert(0, ", ".join(config["slack_vip_names"]))
-        self.place(t("slack_vip_label"), self.slack_vip)
-        self.label(self.grid, t("slack_vip_hint"), font=(FONT, 9), fg=COLOR_MUTED).grid(
-            row=self.next_row, column=1, columnspan=2, sticky="w", pady=(0, 4)
-        )
-        self.next_row += 1
-        self.vip_sounds, chosen = sound_choices(notification_sounds(), config["slack_vip_sound"])
-        extras = tk.Frame(self.grid, bg="white")
-        self.slack_vip_sound = self.choice(t("slack_vip_sound_label"), list(self.vip_sounds), chosen, extras)
-        button(extras, t("sound_preview"), self.preview_vip, "link").pack(side="left")
-
-        self.section(t("section_agenda"))
+        self.section(t("section_display"))
         self.days = self.number(t("agenda_days_label"), config["agenda_days"], 1, 14, t("unit_days"))
         self.show_all_day = self.checkbox(t("show_all_day"), config["show_all_day"])
-
-        self.section(t("section_general"))
-        self.languages = [None, *texts.LANGUAGES]
-        languages = [t("language_auto"), *texts.LANGUAGES.values()]
-        self.language = self.choice(t("language"), languages, languages[self.languages.index(config["language"])])
         polls = [t("minutes_value", minutes=seconds // 60) for seconds in POLL_CHOICES]
         poll = POLL_CHOICES.index(config["poll_seconds"]) if config["poll_seconds"] in POLL_CHOICES else 0
         self.poll = self.choice(t("poll_label"), polls, polls[poll])
-        self.autostart = self.checkbox(t("autostart"), autostart_command() is not None)
 
-        self.label(self.footer, f"Vigie {__version__}", font=(FONT, 9), fg=COLOR_MUTED).pack(side="left")
-        button(self.footer, t("cancel"), self.close).pack(side="right")
-        button(self.footer, t("save"), self.submit, "primary").pack(side="right", padx=(0, 8))
+    def build_slack(self, config):
+        self.tab(t("tab_slack"))
+        self.column(0)
+        self.section(t("section_connection"))
+        status = tk.Frame(self.grid, bg="white")
+        self.label(status, self.app.slack_status_text(), fg=COLOR_MUTED).pack(side="left")
+        button(status, t("slack_tokens_button"), self.app.ask_slack_tokens, "link").pack(side="left", padx=(8, 0))
+        self.place(t("slack_status_label"), status)
+        self.slack_enabled = self.checkbox(t("slack_enable"), config["slack_enabled"])
+
+        self.section(t("section_slack_triggers"))
+        table = tk.Frame(self.grid, bg="white")
+        table.grid(row=self.next_row, column=0, columnspan=3, sticky="w")
+        self.next_row += 1
+        self.label(table, t("slack_action_header"), font=(FONT, 9), fg=COLOR_MUTED).grid(row=0, column=2, sticky="w")
+        action_names = [t(f"slack_action_{action}") for action in SLACK_ACTIONS]
+        self.slack_actions = {}
+        lists = {"keyword": config["slack_keywords"], "channel": config["slack_channels"]}
+        self.slack_lists = {}
+        for row, trigger in enumerate(slack_alerts.TRIGGERS, 1):
+            self.label(table, t(f"slack_trigger_{trigger}")).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+            if trigger in lists:
+                self.slack_lists[trigger] = self.entry(table, ", ".join(lists[trigger]), width=18)
+                self.slack_lists[trigger].grid(row=row, column=1, sticky="w", padx=(0, 12), ipady=2)
+            combobox = ttk.Combobox(table, state="readonly", values=action_names, width=22, font=(FONT, 10))
+            action = config["slack_actions"].get(trigger, "none")
+            combobox.set(action_names[SLACK_ACTIONS.index(action if action in SLACK_ACTIONS else "none")])
+            combobox.grid(row=row, column=2, sticky="w", pady=3)
+            self.slack_actions[trigger] = combobox
+        self.hint(t("slack_triggers_hint"))
+
+        self.column(1)
+        self.section(t("section_slack_alarm"))
+        self.slack_delay = self.number(t("slack_delay_label"), config["slack_delay_minutes"], 1, 30, t("unit_minutes"))
+        self.slack_sounds, chosen = sound_choices(notification_sounds(), config["slack_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.slack_sound = self.choice(t("slack_sound_label"), list(self.slack_sounds), chosen, extras, width=25)
+        button(extras, t("sound_preview"), lambda: self.preview(self.slack_sounds[self.slack_sound.get()]), "link").pack(
+            side="left"
+        )
+        self.slack_alarm_sounds, chosen = sound_choices(alarm_sounds(), config["slack_alarm_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.slack_alarm_sound = self.choice(
+            t("slack_alarm_sound_label"), list(self.slack_alarm_sounds), chosen, extras, width=25
+        )
+        button(
+            extras, t("sound_preview"), lambda: self.preview(self.slack_alarm_sounds[self.slack_alarm_sound.get()]), "link"
+        ).pack(side="left")
+        self.slack_silence = self.silence_choice(config["slack_silence_after_minutes"], width=25)
+
+        self.section(t("section_slack_when"))
+        self.slack_respect_dnd = self.checkbox(t("slack_respect_dnd"), config["slack_respect_dnd"])
+        hours = tk.Frame(self.grid, bg="white")
+        hours.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
+        self.next_row += 1
+        self.slack_hours_only = tk.BooleanVar(self, value=config["slack_hours_only"])
+        self.check(hours, t("slack_hours_from"), self.slack_hours_only).pack(side="left")
+        self.slack_hour_start = self.spin(hours, config["slack_hours"][0], 0, 23)
+        self.label(hours, t("slack_hours_to")).pack(side="left", padx=6)
+        self.slack_hour_end = self.spin(hours, config["slack_hours"][1], 0, 24)
+        self.label(hours, t("slack_hours_unit")).pack(side="left", padx=(6, 0))
+        self.slack_weekdays_only = self.checkbox(t("slack_weekdays_only"), config["slack_weekdays_only"])
+
+        # VIP people: a section of its own, folded until asked for.
+        toggle = button(self.grid, "", self.toggle_vip, "link", font=(FONT, 10, "bold"))
+        toggle.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=(14, 2))
+        self.next_row += 1
+        self.vip_toggle = toggle
+        self.vip_panel = tk.Frame(self.grid, bg=COLOR_PANEL, padx=12, pady=8)
+        self.vip_panel.grid(row=self.next_row, column=0, columnspan=3, sticky="we")
+        self.next_row += 1
+        outer = self.grid, self.next_row
+        self.grid, self.next_row = tk.Frame(self.vip_panel, bg=COLOR_PANEL), 0
+        self.grid.pack(anchor="w")
+        self.slack_vip_enabled = self.checkbox(t("slack_vip_enable"), config["slack_vip_enabled"])
+        self.slack_vip = self.entry(self.grid, ", ".join(config["slack_vip_names"]), width=24)
+        self.place(t("slack_vip_label"), self.slack_vip)
+        self.hint(t("slack_vip_hint"), wrap=self.wrap * 3 // 4)
+        self.vip_sounds, chosen = sound_choices(notification_sounds(), config["slack_vip_sound"])
+        extras = tk.Frame(self.grid, bg=COLOR_PANEL)
+        self.slack_vip_sound = self.choice(t("slack_vip_sound_label"), list(self.vip_sounds), chosen, extras, width=25)
+        button(extras, t("sound_preview"), self.preview_vip, "link").pack(side="left")
+        voice = tk.Frame(self.grid, bg=COLOR_PANEL)
+        self.slack_vip_voice = tk.BooleanVar(self, value=config["slack_vip_voice"])
+        self.check(voice, t("slack_vip_voice_label"), self.slack_vip_voice).pack(side="left")
+        self.slack_vip_phrase = self.entry(voice, vip_phrase(config), width=22)
+        self.slack_vip_phrase.pack(side="left", padx=(6, 0), ipady=2)
+        voice.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
+        self.next_row += 1
+        self.grid, self.next_row = outer
+        self.vip_open = False
+        self.show_vip()
 
     # --- building blocks: one setting per row of the grid
 
@@ -913,15 +1086,26 @@ class SettingsDialog(Dialog):
         )
         self.next_row += 1
 
-    def number(self, label, value, low, high, unit):
+    def hint(self, text, wrap=None):
+        self.label(self.grid, text, font=(FONT, 9), fg=COLOR_MUTED, wraplength=wrap or self.wrap, justify="left").grid(
+            row=self.next_row, column=0, columnspan=3, sticky="w", pady=(0, 4)
+        )
+        self.next_row += 1
+
+    def entry(self, parent, value, width):
+        entry = tk.Entry(
+            parent, font=(FONT, 10), width=width, relief="flat",
+            highlightthickness=1, highlightbackground="#c4c7cc", highlightcolor=COLOR_ACCENT,
+        )
+        entry.insert(0, value)
+        return entry
+
+    def spin(self, parent, value, low, high):
         variable = tk.StringVar(self, value=str(value))
-        cell = tk.Frame(self.grid, bg="white")
         tk.Spinbox(
-            cell, from_=low, to=high, width=5, font=(FONT, 10), textvariable=variable, relief="flat",
+            parent, from_=low, to=high, width=5, font=(FONT, 10), textvariable=variable, relief="flat",
             highlightthickness=1, highlightbackground="#c4c7cc", highlightcolor=COLOR_ACCENT,
         ).pack(side="left")
-        self.label(cell, unit, fg=COLOR_MUTED).pack(side="left", padx=(8, 0))
-        self.place(label, cell)
 
         def read():
             try:
@@ -931,20 +1115,53 @@ class SettingsDialog(Dialog):
 
         return read
 
-    def choice(self, label, values, selected, extra=None):
-        combobox = ttk.Combobox(self.grid, state="readonly", values=values, width=28, font=(FONT, 10))
+    def number(self, label, value, low, high, unit):
+        cell = tk.Frame(self.grid, bg=self.grid["bg"])
+        read = self.spin(cell, value, low, high)
+        self.label(cell, unit, fg=COLOR_MUTED).pack(side="left", padx=(8, 0))
+        self.place(label, cell)
+        return read
+
+    def choice(self, label, values, selected, extra=None, width=26):
+        combobox = ttk.Combobox(self.grid, state="readonly", values=values, width=width, font=(FONT, 10))
         combobox.set(selected)
         self.place(label, combobox, extra)
         return combobox
 
+    def silence_choice(self, minutes, width=26):
+        silences = [t("never") if value == 0 else t("minutes_value", minutes=value) for value in SILENCE_CHOICES]
+        selected = silences[SILENCE_CHOICES.index(minutes) if minutes in SILENCE_CHOICES else 0]
+        return self.choice(t("silence_label"), silences, selected, width=width)
+
+    def check(self, parent, label, variable):
+        background = parent["bg"]
+        return tk.Checkbutton(
+            parent, text=label, variable=variable, font=(FONT, 10), bg=background, activebackground=background, fg=COLOR_TEXT
+        )
+
     def checkbox(self, label, checked):
         variable = tk.BooleanVar(self, value=checked)
-        control = tk.Checkbutton(
-            self.grid, text=label, variable=variable, font=(FONT, 10), bg="white", activebackground="white", fg=COLOR_TEXT
-        )
-        control.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
+        self.check(self.grid, label, variable).grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
         self.next_row += 1
         return variable
+
+    def radio(self, label, variable, value):
+        tk.Radiobutton(
+            self.grid, text=label, variable=variable, value=value, font=(FONT, 10), bg="white",
+            activebackground="white", fg=COLOR_TEXT, justify="left", anchor="w",
+        ).grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=2)
+        self.next_row += 1
+
+    def toggle_vip(self):
+        self.vip_open = not self.vip_open
+        self.show_vip()
+
+    def show_vip(self):
+        self.vip_toggle.config(text=("▾ " if self.vip_open else "▸ ") + t("section_vip"))
+        if self.vip_open:
+            self.vip_panel.grid()
+        else:
+            self.vip_panel.grid_remove()
 
     # --- sound
 
@@ -954,7 +1171,8 @@ class SettingsDialog(Dialog):
             play_once(path)
 
     def preview_vip(self):
-        announce(self.vip_sounds[self.slack_vip_sound.get()], t("slack_vip_voice"), with_sound=not self.app.sound_playing)
+        phrase = self.slack_vip_phrase.get().strip() if self.slack_vip_voice.get() else None
+        announce(self.vip_sounds[self.slack_vip_sound.get()], phrase, with_sound=not self.app.sound_playing)
 
     def browse(self):
         path = filedialog.askopenfilename(parent=self, filetypes=[(t("wav_files"), "*.wav")])
@@ -967,21 +1185,42 @@ class SettingsDialog(Dialog):
     # --- saving
 
     def submit(self):
+        def names(entry):
+            return [name.strip() for name in entry.get().split(",") if name.strip()]
+
+        phrase = self.slack_vip_phrase.get().strip()
         settings = {
+            "language": self.languages[self.language.current()],
+            "alert_mode": self.alert_mode.get(),
             "lead_minutes": self.lead(),
-            "snooze_minutes": self.snooze(),
-            "sound": self.sounds[self.sound.get()],
-            "silence_after_minutes": SILENCE_CHOICES[self.silence.current()],
+            "alert_at_start": self.alert_at_start.get(),
+            "late_grace_minutes": self.late_grace(),
             "ignore_free": self.ignore_free.get(),
+            "ignore_unanswered": self.ignore_unanswered.get(),
+            "sound": self.sounds[self.sound.get()],
+            "snooze_minutes": self.snooze(),
+            "silence_after_minutes": SILENCE_CHOICES[self.silence.current()],
             "agenda_days": self.days(),
             "show_all_day": self.show_all_day.get(),
-            "language": self.languages[self.language.current()],
             "poll_seconds": POLL_CHOICES[self.poll.current()],
             "slack_enabled": self.slack_enabled.get(),
+            "slack_actions": {trigger: SLACK_ACTIONS[box.current()] for trigger, box in self.slack_actions.items()},
+            "slack_keywords": names(self.slack_lists["keyword"]),
+            "slack_channels": [name.lstrip("#") for name in names(self.slack_lists["channel"])],
             "slack_delay_minutes": self.slack_delay(),
             "slack_sound": self.slack_sounds[self.slack_sound.get()],
-            "slack_vip_names": [name.strip() for name in self.slack_vip.get().split(",") if name.strip()],
+            "slack_alarm_sound": self.slack_alarm_sounds[self.slack_alarm_sound.get()],
+            "slack_silence_after_minutes": SILENCE_CHOICES[self.slack_silence.current()],
+            "slack_respect_dnd": self.slack_respect_dnd.get(),
+            "slack_hours_only": self.slack_hours_only.get(),
+            "slack_hours": [self.slack_hour_start(), self.slack_hour_end()],
+            "slack_weekdays_only": self.slack_weekdays_only.get(),
+            "slack_vip_enabled": self.slack_vip_enabled.get(),
+            "slack_vip_names": names(self.slack_vip),
             "slack_vip_sound": self.vip_sounds[self.slack_vip_sound.get()],
+            "slack_vip_voice": self.slack_vip_voice.get(),
+            # The default phrase is not stored, so that it follows the language.
+            "slack_vip_phrase": None if phrase in ("", t("slack_vip_voice")) else phrase,
         }
         autostart = self.autostart.get()
         self.close()
@@ -1332,7 +1571,7 @@ class App:
         self.root.withdraw()
         self.icons = {True: make_icon(COLOR_OK), False: make_icon(COLOR_ERROR)}
         # Kept on self: Tk only holds a weak reference to the picture of its windows.
-        self.window_icon = ImageTk.PhotoImage(make_icon().resize((64, 64), Image.LANCZOS))
+        self.window_icon = ImageTk.PhotoImage(make_icon().resize((64, 64), Image.LANCZOS), master=self.root)
         self.root.iconphoto(True, self.window_icon)
         self.tray = pystray.Icon(APP, self.icons[False], "Vigie", self.build_menu())
         self.fetcher = Fetcher(self)
@@ -1449,7 +1688,14 @@ class App:
         if tokens is None:
             self.slack_state = "no_tokens"
             return
-        watcher = SlackWatcher(*tokens, on_message=self.slack_received, vip_names=self.config["slack_vip_names"])
+        config = self.config
+        watcher = SlackWatcher(
+            *tokens,
+            on_message=self.slack_received,
+            vip_names=config["slack_vip_names"] if config["slack_vip_enabled"] else (),
+            keywords=config["slack_keywords"],
+            channels=config["slack_channels"],
+        )
         self.slack_state = "connecting"
 
         def connect():
@@ -1489,18 +1735,29 @@ class App:
         return t(f"slack_status_{state}")
 
     def slack_received(self, message):
-        """Called by the Slack connection, off the UI thread: "Do not disturb" silences everything."""
-        if self.slack is not None and self.slack.do_not_disturb():
+        """Called by the Slack connection, off the UI thread: quiet hours and "Do not disturb" silence everything."""
+        if not slack_hours_open(self.config, datetime.now()):
+            log.info("slack: outside alert hours, message ignored")
+            return
+        if self.config["slack_respect_dnd"] and self.slack is not None and self.slack.do_not_disturb():
             log.info("slack: do not disturb, message ignored")
             return
         self.post(partial(self.on_slack_message, message))
 
     def on_slack_message(self, message):
-        if message.vip:
+        if message.vip and self.config["slack_vip_enabled"]:
             self.announce_vip(message)
             return
-        if not self.sound_playing:
+        sound, alarm = slack_action(self.config["slack_actions"], message.triggers)
+        if not (sound or alarm):
+            return
+        log.info("slack: message (%s) -> %s", ", ".join(sorted(message.triggers)), "+".join(
+            name for name, wanted in (("sound", sound), ("alarm", alarm)) if wanted
+        ))
+        if sound and not self.sound_playing:
             play_once(self.config["slack_sound"])
+        if not alarm:
+            return
         # The first unread message starts the delay; the next ones join it.
         if self.slack_group is None:
             deadline = datetime.now().astimezone() + timedelta(minutes=self.config["slack_delay_minutes"])
@@ -1515,7 +1772,8 @@ class App:
         self.vip_announced[message.author] = now
         log.info("slack: VIP message announced")
         # Over a ringing alarm, the voice alone: a new sound would stop the alarm's.
-        announce(self.config["slack_vip_sound"], t("slack_vip_voice"), with_sound=not self.sound_playing)
+        phrase = vip_phrase(self.config) if self.config["slack_vip_voice"] else None
+        announce(self.config["slack_vip_sound"], phrase, with_sound=not self.sound_playing)
 
     def slack_tick(self, now):
         group = self.slack_group
@@ -1547,7 +1805,7 @@ class App:
         key = f"slack:{messages[0].ts}"
         self.windows[key] = SlackAlarmWindow(self, key, messages, len(self.windows))
         self.ringing_since = datetime.now().astimezone()
-        self.set_sound(True)
+        self.set_sound(True, self.config["slack_alarm_sound"])
 
     def open_slack(self, message):
         os.startfile(self.slack.link(message))
@@ -1708,7 +1966,8 @@ class App:
 
         # An upcoming event that left the calendars was cancelled or moved: forget its alarm.
         def gone(event):
-            return event.key not in self.events and event.start > now and not event.key.startswith(TEST_PREFIX)
+            key = event.key.removesuffix(START_SUFFIX)
+            return key not in self.events and event.start > now and not key.startswith(TEST_PREFIX)
 
         for key in [key for key, (_, event) in self.snoozed.items() if gone(event)]:
             del self.snoozed[key]
@@ -1758,9 +2017,13 @@ class App:
         handled = self.acked.keys() | self.snoozed.keys() | self.windows.keys()
         lead = timedelta(minutes=self.config["lead_minutes"])
         grace = timedelta(minutes=self.config["late_grace_minutes"])
-        ringable = [event for event in self.events.values() if not (event.free and self.config["ignore_free"])]
+        ringable = ringable_events(self.events.values(), self.config)
         for event in due_events(ringable, handled, now, lead, grace):
-            self.ring(event)
+            self.alert(event)
+        if self.config["alert_at_start"]:
+            at_start = [replace(event, key=event.key + START_SUFFIX) for event in ringable]
+            for event in due_events(at_start, handled, now, timedelta(0), grace):
+                self.alert(event)
         for key, (ring_at, event) in list(self.snoozed.items()):
             if now >= ring_at:
                 del self.snoozed[key]
@@ -1768,7 +2031,9 @@ class App:
 
         self.slack_tick(now)
 
-        silence_after = self.config["silence_after_minutes"]
+        # The calendar's setting while an appointment rings, Slack's otherwise.
+        calendar_ringing = any(isinstance(window, AlarmWindow) for window in self.windows.values())
+        silence_after = self.config["silence_after_minutes" if calendar_ringing else "slack_silence_after_minutes"]
         if self.sound_playing and silence_after and now - self.ringing_since >= timedelta(minutes=silence_after):
             # Nobody is there: the windows stay, the noise stops.
             self.set_sound(False)
@@ -1776,11 +2041,31 @@ class App:
         self.refresh_health()
         self.root.after(TICK_MS, self.tick)
 
+    def alert(self, event):
+        if self.config["alert_mode"] == "ring":
+            self.chime(event)
+        else:
+            self.ring(event)
+
     def ring(self, event):
         log.info("alarm: %s at %s", event.summary, event.start.isoformat())
         self.windows[event.key] = AlarmWindow(self, event, len(self.windows))
         self.ringing_since = datetime.now().astimezone()
         self.set_sound(True)
+
+    def chime(self, event):
+        """The "ring" mode: one sound and a Windows notification, no window to close."""
+        log.info("ring: %s at %s", event.summary, event.start.isoformat())
+        if not self.sound_playing:
+            if os.path.exists(self.config["sound"]):
+                play_once(self.config["sound"])
+            else:
+                winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        when = event.start.strftime("%H:%M")
+        self.tray.notify(t("ring_notification", time=when, location=event.location or event.calendar)[:250], event.summary[:60])
+        if not event.key.startswith(TEST_PREFIX):
+            self.acked[event.key] = event.start.isoformat()
+            self.save_state()
 
     def close_window(self, key):
         window = self.windows.pop(key, None)
@@ -1804,9 +2089,10 @@ class App:
         now = datetime.now().astimezone()
         start = now + timedelta(minutes=self.config["lead_minutes"])
         key = f"{TEST_PREFIX}{now.isoformat()}"
-        self.ring(Event(key, start, start + timedelta(hours=1), t("test_event"), "", t("test_calendar")))
+        self.alert(Event(key, start, start + timedelta(hours=1), t("test_event"), "", t("test_calendar")))
 
-    def set_sound(self, playing):
+    def set_sound(self, playing, sound=None):
+        """sound: the file to loop, the calendar's by default; a sound already playing goes on."""
         if playing == self.sound_playing:
             return
         self.sound_playing = playing
@@ -1814,8 +2100,9 @@ class App:
             winsound.PlaySound(None, winsound.SND_PURGE)
             return
         flags = winsound.SND_ASYNC | winsound.SND_LOOP
-        if os.path.exists(self.config["sound"]):
-            winsound.PlaySound(self.config["sound"], flags | winsound.SND_FILENAME)
+        sound = sound or self.config["sound"]
+        if os.path.exists(sound):
+            winsound.PlaySound(sound, flags | winsound.SND_FILENAME)
         else:
             winsound.PlaySound("SystemExclamation", flags | winsound.SND_ALIAS)
 
