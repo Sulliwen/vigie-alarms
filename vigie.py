@@ -954,7 +954,7 @@ class AccountsDialog(Dialog):
 
 
 class SettingsDialog(Dialog):
-    """Four tabs: General, Agenda (appointments only), Slack and Zoom."""
+    """Three tabs: General, Agenda (appointments only) and Messaging (Slack, Zoom and their VIP people)."""
 
     def __init__(self, app):
         super().__init__(app, "settings", t("title_settings"), t("settings_intro"))
@@ -965,8 +965,7 @@ class SettingsDialog(Dialog):
         self.notebook.pack(fill="both", expand=True)
         self.build_general(app.config)
         self.build_agenda(app.config)
-        self.build_slack(app.config)
-        self.build_zoom(app.config)
+        self.build_messaging(app.config)
 
         self.label(self.footer, f"Vigie {__version__}", font=(FONT, 9), fg=COLOR_MUTED).pack(side="left")
         button(self.footer, t("cancel"), self.close).pack(side="right")
@@ -980,7 +979,7 @@ class SettingsDialog(Dialog):
         self.next_row = 0
 
     def column(self, index):
-        """Starts a new column of settings in the current tab (the Slack tab has two)."""
+        """Starts a new column of settings in the current tab or pane (Slack and Zoom have two)."""
         page = self.grid if index == 0 else self.columns
         if index == 0:
             self.columns = page
@@ -1027,8 +1026,54 @@ class SettingsDialog(Dialog):
         poll = POLL_CHOICES.index(config["poll_seconds"]) if config["poll_seconds"] in POLL_CHOICES else 0
         self.poll = self.choice(t("poll_label"), polls, polls[poll])
 
+    def build_messaging(self, config):
+        """A list of the messaging tools on the left, the settings of the chosen one on the right."""
+        self.tab(t("tab_messaging"))
+        page = self.grid
+        self.menu = tk.Frame(page, bg=COLOR_PANEL, padx=6, pady=6)
+        self.menu.grid(row=0, column=0, sticky="ns", padx=(0, 20))
+        self.panes = tk.Frame(page, bg="white")
+        self.panes.grid(row=0, column=1, sticky="nw")
+        self.pane_items = {}
+        self.build_slack(config)
+        self.build_zoom(config)
+        tk.Frame(self.menu, bg=COLOR_LINE, height=1).pack(fill="x", pady=8)
+        self.build_vip(config)
+        self.show_pane("slack")
+
+    def pane(self, name, title, health=None):
+        """Starts the settings of one messaging tool, with its entry in the list: a dot tells its state."""
+        frame = tk.Frame(self.panes, bg="white")
+        frame.grid(row=0, column=0, sticky="nsew")
+        item = tk.Frame(self.menu, bg=COLOR_PANEL, cursor="hand2", padx=8, pady=5)
+        item.pack(fill="x")
+        dot = {"ok": COLOR_OK, "error": COLOR_ERROR, "off": "#bdc1c6"}[health] if health else COLOR_ACCENT
+        parts = [
+            tk.Label(item, text="●" if health else "★", font=(FONT, 10), bg=COLOR_PANEL, fg=dot),
+            tk.Label(item, text=title, font=(FONT, 10), bg=COLOR_PANEL, fg=COLOR_TEXT, width=14, anchor="w"),
+        ]
+        for part in parts:
+            part.pack(side="left", padx=(0, 6))
+        for widget in (item, *parts):
+            widget.bind("<Button-1>", lambda _: self.show_pane(name))
+        self.pane_items[name] = (frame, item, parts)
+        self.grid = frame
+        self.next_row = 0
+
+    def show_pane(self, name):
+        for key, (frame, item, parts) in self.pane_items.items():
+            chosen = key == name
+            background = COLOR_HIGHLIGHT if chosen else COLOR_PANEL
+            item.config(bg=background)
+            for part in parts:
+                part.config(bg=background)
+            parts[1].config(font=(FONT, 10, "bold" if chosen else "normal"))
+            if chosen:
+                frame.tkraise()
+        self.current_pane = name
+
     def build_slack(self, config):
-        self.tab(t("tab_slack"))
+        self.pane("slack", t("tab_slack"), self.app.messaging_health("slack"))
         self.column(0)
         self.section(t("section_connection"))
         status = tk.Frame(self.grid, bg="white")
@@ -1067,38 +1112,31 @@ class SettingsDialog(Dialog):
         self.slack_respect_dnd = self.checkbox(t("slack_respect_dnd"), config["slack_respect_dnd"])
         self.slack_hours = self.hours_rows(config, "slack")
 
-        # VIP people: a section of its own, folded until asked for.
-        toggle = button(self.grid, "", self.toggle_vip, "link", font=(FONT, 10, "bold"))
-        toggle.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=(14, 2))
-        self.next_row += 1
-        self.vip_toggle = toggle
-        self.vip_panel = tk.Frame(self.grid, bg=COLOR_PANEL, padx=12, pady=8)
-        self.vip_panel.grid(row=self.next_row, column=0, columnspan=3, sticky="we")
-        self.next_row += 1
-        outer = self.grid, self.next_row
-        self.grid, self.next_row = tk.Frame(self.vip_panel, bg=COLOR_PANEL), 0
-        self.grid.pack(anchor="w")
+
+    def build_vip(self, config):
+        """The VIP people, shared by every messaging tool."""
+        self.pane("vip", t("section_vip"))
+        self.section(t("section_vip"))
+        self.hint(t("vip_intro"))
         self.slack_vip_enabled = self.checkbox(t("slack_vip_enable"), config["slack_vip_enabled"])
         self.slack_vip = self.entry(self.grid, ", ".join(config["slack_vip_names"]), width=24)
         self.place(t("slack_vip_label"), self.slack_vip)
         self.hint(t("slack_vip_hint"), wrap=self.wrap * 3 // 4)
         self.vip_sounds, chosen = sound_choices(notification_sounds(), config["slack_vip_sound"])
-        extras = tk.Frame(self.grid, bg=COLOR_PANEL)
+        extras = tk.Frame(self.grid, bg="white")
         self.slack_vip_sound = self.choice(t("slack_vip_sound_label"), list(self.vip_sounds), chosen, extras, width=25)
         button(extras, t("sound_preview"), self.preview_vip, "link").pack(side="left")
-        voice = tk.Frame(self.grid, bg=COLOR_PANEL)
+        voice = tk.Frame(self.grid, bg="white")
         self.slack_vip_voice = tk.BooleanVar(self, value=config["slack_vip_voice"])
         self.check(voice, t("slack_vip_voice_label"), self.slack_vip_voice).pack(side="left")
         self.slack_vip_phrase = self.entry(voice, vip_phrase(config), width=22)
         self.slack_vip_phrase.pack(side="left", padx=(6, 0), ipady=2)
         voice.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
         self.next_row += 1
-        self.grid, self.next_row = outer
-        self.vip_open = False
-        self.show_vip()
 
     def build_zoom(self, config):
-        self.tab(t("tab_zoom"))
+        self.pane("zoom", t("tab_zoom"), self.app.messaging_health("zoom"))
+        self.column(0)
         self.section(t("section_connection"))
         status = tk.Frame(self.grid, bg="white")
         self.label(status, self.app.zoom_status_text(), fg=COLOR_MUTED).pack(side="left")
@@ -1113,6 +1151,7 @@ class SettingsDialog(Dialog):
         )
         self.hint(t("zoom_triggers_hint"))
 
+        self.column(1)
         self.section(t("section_sound"))
         self.zoom_sounds, chosen = sound_choices(notification_sounds(), config["zoom_sound"])
         extras = tk.Frame(self.grid, bg="white")
@@ -1123,7 +1162,6 @@ class SettingsDialog(Dialog):
 
         self.section(t("section_slack_when"))
         self.zoom_hours = self.hours_rows(config, "zoom")
-        self.hint(t("zoom_vip_hint"))
 
     # --- building blocks: one setting per row of the grid
 
@@ -1246,17 +1284,6 @@ class SettingsDialog(Dialog):
             activebackground="white", fg=COLOR_TEXT, justify="left", anchor="w",
         ).grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=2)
         self.next_row += 1
-
-    def toggle_vip(self):
-        self.vip_open = not self.vip_open
-        self.show_vip()
-
-    def show_vip(self):
-        self.vip_toggle.config(text=("▾ " if self.vip_open else "▸ ") + t("section_vip"))
-        if self.vip_open:
-            self.vip_panel.grid()
-        else:
-            self.vip_panel.grid_remove()
 
     # --- sound
 
@@ -1874,11 +1901,20 @@ class App:
             self.slack.stop()
             self.slack = None
 
+    def messaging_state(self, service):
+        """off, no_tokens, connecting, connected or disconnected."""
+        state, watcher = getattr(self, f"{service}_state"), getattr(self, service)
+        if state == "connected" and not (watcher and watcher.connected()):
+            return "disconnected"
+        return state
+
+    def messaging_health(self, service):
+        """The dot of a messaging tool in the settings: ok, error or off."""
+        state = self.messaging_state(service)
+        return "ok" if state == "connected" else "off" if state in ("off", "connecting") else "error"
+
     def slack_status_text(self):
-        state = self.slack_state
-        if state == "connected" and not (self.slack and self.slack.connected()):
-            state = "disconnected"
-        return t(f"slack_status_{state}")
+        return t(f"slack_status_{self.messaging_state('slack')}")
 
     def slack_received(self, message):
         """Called by the Slack connection, off the UI thread: quiet hours and "Do not disturb" silence everything."""
@@ -2019,10 +2055,7 @@ class App:
             self.zoom = None
 
     def zoom_status_text(self):
-        state = self.zoom_state
-        if state == "connected" and not (self.zoom and self.zoom.connected()):
-            state = "disconnected"
-        return t(f"slack_status_{state}")
+        return t(f"slack_status_{self.messaging_state('zoom')}")
 
     def zoom_received(self, message):
         """Called by the Zoom watcher, off the UI thread."""

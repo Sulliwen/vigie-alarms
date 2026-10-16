@@ -40,6 +40,9 @@ Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
   contacts choisis ; personnes VIP partagées avec Slack ; onglet Zoom dans les
   Paramètres, connexion par le navigateur. Pas d'alarme si non lu (Zoom ne le
   dit pas), environ 30 secondes de délai.
+- Paramètres : Slack, Zoom et les futures messageries regroupés dans un onglet
+  « Messageries » (liste à gauche avec l'état de chaque outil) ; les personnes
+  VIP y ont leur propre entrée, commune à toutes les messageries.
 - Mode développement (`dev.ps1`) : lancement depuis le code, redémarrage
   automatique à chaque modification.
 

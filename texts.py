@@ -111,10 +111,11 @@ STRINGS = {
         ),
         # Settings
         "title_settings": "Paramètres",
-        "settings_intro": "Options générales, alertes des rendez-vous, de Slack et de Zoom",
+        "settings_intro": "Options générales, alertes des rendez-vous et des messageries",
         "tab_general": "Général",
         "tab_agenda": "Agenda",
         "tab_slack": "Slack",
+        "tab_messaging": "Messageries",
         "section_interface": "Interface",
         "section_startup": "Démarrage",
         "section_alert_mode": "Type d'alerte",
@@ -229,7 +230,7 @@ STRINGS = {
             "ou * pour tous. Zoom ne dit pas si un message a été lu : pas d'alarme, seulement un son, environ "
             "30 secondes après le message."
         ),
-        "zoom_vip_hint": "Les personnes VIP sont celles de l'onglet Slack ; leurs messages Zoom sont annoncés de la même façon.",
+        "vip_intro": "Valable pour toutes les messageries : Slack, Zoom.",
         "zoom_menu_status": "Zoom : {state}",
         "zoom_connect_title": "Connecter Zoom",
         "zoom_connect_help": (
@@ -375,10 +376,11 @@ STRINGS = {
         ),
         # Settings
         "title_settings": "Settings",
-        "settings_intro": "General options, appointment, Slack and Zoom alerts",
+        "settings_intro": "General options, appointment and messaging alerts",
         "tab_general": "General",
         "tab_agenda": "Agenda",
         "tab_slack": "Slack",
+        "tab_messaging": "Messaging",
         "section_interface": "Interface",
         "section_startup": "Startup",
         "section_alert_mode": "Alert type",
@@ -492,7 +494,7 @@ STRINGS = {
             "or * for all. Zoom does not tell whether a message was read: no alarm, only a sound, about 30 seconds "
             "after the message."
         ),
-        "zoom_vip_hint": "VIP people are those of the Slack tab; their Zoom messages are announced the same way.",
+        "vip_intro": "For every messaging tool: Slack, Zoom.",
         "zoom_menu_status": "Zoom: {state}",
         "zoom_connect_title": "Connect Zoom",
         "zoom_connect_help": (

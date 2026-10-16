@@ -79,8 +79,8 @@ messages, edits and bots never trigger anything.
 - **When**: silent during Slack's “Do not disturb” (can be turned off), and if
   you wish only between two hours and only Monday to Friday.
 
-**VIP people** (folding section of the Slack tab; unticked, no VIP treatment at
-all): all their messages are announced, wherever you are a member, even without
+**VIP people** (Settings → Messaging → VIP people, shared by Slack and Zoom;
+unticked, no VIP treatment at all): all their messages are announced, wherever you are a member, even without
 a tag. A sound, then a voice says the chosen phrase (“VIP message” by default).
 They never trigger an alarm, and a series of messages is announced once a
 minute. Names are compared regardless of case and word order (“Jakez Rolland”
@@ -107,7 +107,7 @@ settings:
 
 Then “Basic Information” → “App-Level Tokens” → generate a token with the
 `connections:write` permission, and “Install App” → “Install to Workspace”. In
-Vigie: Settings → Slack → “Slack tokens…”, paste both tokens (`xapp-…` and
+Vigie: Settings → Messaging → Slack → “Slack tokens…”, paste both tokens (`xapp-…` and
 `xoxp-…`).
 
 ## Zoom alerts
@@ -130,7 +130,7 @@ Differences with Slack:
   its "recent conversations" list stays empty on some accounts. Vigie reads each
   of your channels every 30 seconds instead, at least one second apart to stay
   within Zoom's limit. Direct messages are read for the listed contacts only.
-- **VIP people** are those of the Slack tab; their Zoom messages are announced
+- **VIP people**: the same list as for Slack; their Zoom messages are announced
   the same way (a sound, then the voice).
 - **Hours** and alert days of its own.
 
@@ -144,7 +144,7 @@ Setting up, once: on <https://marketplace.zoom.us>, “Develop” → “Build A
    `team_chat:read:list_user_messages`, `team_chat:read:user_message` and
    `user:read:user`.
 
-In Vigie: Settings → Zoom → “Connect Zoom…”, paste the **Public Client ID**,
+In Vigie: Settings → Messaging → Zoom → “Connect Zoom…”, paste the **Public Client ID**,
 then authorize the app in the browser. The token is kept in the Windows
 Credential Manager and renewed on its own.
 
@@ -184,9 +184,13 @@ Right-click on the icon → “Settings…”:
     automatic silence (the window stays);
   - display and sync: days shown, all-day events, how often calendars are read
     again.
-- **Slack**: connection, triggers, sound and alarm, hours, VIP people (see
-  [Slack alerts](#slack-alerts)).
-- **Zoom**: connection, triggers, sound, hours (see [Zoom alerts](#zoom-alerts)).
+- **Messaging**: a list on the left (a green, red or grey dot tells whether the
+  tool is connected, failing or off), the settings of the chosen tool on the
+  right:
+  - **Slack**: connection, triggers, sound and alarm, hours (see
+    [Slack alerts](#slack-alerts));
+  - **Zoom**: connection, triggers, sound, hours (see [Zoom alerts](#zoom-alerts));
+  - **VIP people**, shared by every messaging tool.
 
 Settings are saved in `%LOCALAPPDATA%\vigie\config.json`. `my_emails`
 (addresses used to recognise your invitations) can only be changed in that

@@ -83,8 +83,8 @@ jamais rien.
 - **Quand** : silence pendant le « Ne pas déranger » de Slack (désactivable), et
   au choix seulement entre deux heures et seulement du lundi au vendredi.
 
-**Personnes VIP** (section dépliable de l'onglet Slack ; décochée, aucun
-traitement VIP) : tous leurs messages sont annoncés, partout où vous êtes
+**Personnes VIP** (Paramètres → Messageries → Personnes VIP, communes à Slack
+et Zoom ; décochée, aucun traitement VIP) : tous leurs messages sont annoncés, partout où vous êtes
 membre, même sans tag. Un son, puis une voix dit la phrase choisie (« Message
 VIP » par défaut). Il n'y a jamais d'alarme pour eux, et une série de messages
 n'est annoncée qu'une fois par minute. Le nom est comparé sans tenir compte des
@@ -112,7 +112,7 @@ settings:
 
 Puis « Basic Information » → « App-Level Tokens » → générer un jeton avec la
 permission `connections:write`, et « Install App » → « Install to Workspace ».
-Dans Vigie : Paramètres → Slack → « Jetons Slack… », y coller les deux jetons
+Dans Vigie : Paramètres → Messageries → Slack → « Jetons Slack… », y coller les deux jetons
 (`xapp-…` et `xoxp-…`).
 
 ## Alertes Zoom
@@ -136,8 +136,8 @@ Différences avec Slack :
   certains comptes. Vigie relit donc chacun de vos canaux toutes les
   30 secondes, en espaçant les appels d'au moins une seconde pour respecter la
   limite de Zoom. Les messages privés ne sont lus que pour les contacts listés.
-- **Personnes VIP** : ce sont celles de l'onglet Slack ; leurs messages Zoom
-  sont annoncés de la même façon (un son, puis la voix).
+- **Personnes VIP** : la même liste que pour Slack ; leurs messages Zoom sont
+  annoncés de la même façon (un son, puis la voix).
 - **Horaires** et jours d'alerte propres à Zoom.
 
 Mise en place, une fois : sur <https://marketplace.zoom.us>, « Develop » →
@@ -150,7 +150,7 @@ Mise en place, une fois : sur <https://marketplace.zoom.us>, « Develop » →
    `team_chat:read:list_user_messages`, `team_chat:read:user_message` et
    `user:read:user`.
 
-Dans Vigie : Paramètres → Zoom → « Connecter Zoom… », y coller le **Public
+Dans Vigie : Paramètres → Messageries → Zoom → « Connecter Zoom… », y coller le **Public
 Client ID**, puis autoriser l'application dans le navigateur. Le jeton est
 conservé dans le Gestionnaire d'identifications Windows et renouvelé tout seul.
 
@@ -191,10 +191,14 @@ Clic droit sur l'icône → « Paramètres… » :
     arrêt automatique du son (la fenêtre reste affichée) ;
   - affichage et synchronisation : jours affichés, événements « toute la
     journée », fréquence de relecture des agendas.
-- **Slack** : connexion, déclencheurs, son et alarme, horaires, personnes VIP
-  (voir [Alertes Slack](#alertes-slack)).
-- **Zoom** : connexion, déclencheurs, son, horaires (voir
-  [Alertes Zoom](#alertes-zoom)).
+- **Messageries** : une liste à gauche (une pastille verte, rouge ou grise
+  indique si l'outil est connecté, en échec ou désactivé), les réglages de
+  l'outil choisi à droite :
+  - **Slack** : connexion, déclencheurs, son et alarme, horaires (voir
+    [Alertes Slack](#alertes-slack)) ;
+  - **Zoom** : connexion, déclencheurs, son, horaires (voir
+    [Alertes Zoom](#alertes-zoom)) ;
+  - **Personnes VIP**, communes à toutes les messageries.
 
 Les réglages sont enregistrés dans `%LOCALAPPDATA%\vigie\config.json`.
 `my_emails` (adresses servant à reconnaître vos invitations) ne se change que
