@@ -115,6 +115,45 @@ permission `connections:write`, et « Install App » → « Install to Workspace
 Dans Vigie : Paramètres → Slack → « Jetons Slack… », y coller les deux jetons
 (`xapp-…` et `xoxp-…`).
 
+## Alertes Zoom
+
+Vigie peut aussi surveiller Zoom Team Chat, avec un **son** par déclencheur :
+
+| Déclencheur | Par défaut |
+| --- | --- |
+| Messages privés des contacts listés (adresses e-mail) | Son |
+| Mention @moi | Son |
+| Réponse à l'un de vos messages | Rien |
+| `@all` | Rien |
+| Mots-clés (mots entiers, sans tenir compte des majuscules) | Rien |
+| Canaux suivis (leurs noms, ou `*` pour tous) : tous leurs messages | Rien |
+
+Différences avec Slack :
+
+- **Pas d'alarme si non lu** : l'API de Zoom ne dit pas si un message a été lu.
+- **Environ 30 secondes de délai** : Zoom n'envoie rien en direct à un
+  programme de bureau, et sa liste des « conversations récentes » reste vide sur
+  certains comptes. Vigie relit donc chacun de vos canaux toutes les
+  30 secondes, en espaçant les appels d'au moins une seconde pour respecter la
+  limite de Zoom. Les messages privés ne sont lus que pour les contacts listés.
+- **Personnes VIP** : ce sont celles de l'onglet Slack ; leurs messages Zoom
+  sont annoncés de la même façon (un son, puis la voix).
+- **Horaires** et jours d'alerte propres à Zoom.
+
+Mise en place, une fois : sur <https://marketplace.zoom.us>, « Develop » →
+« Build App » → « General App » :
+
+1. « Basic Information » : **User-managed**, activer **Use Public Client
+   OAuth**, mettre `http://127.0.0.1:8765/callback` comme « OAuth Redirect URL »
+   et dans l'« OAuth Allow List ».
+2. « Scopes », uniquement en lecture : `team_chat:read:list_user_channels`,
+   `team_chat:read:list_user_messages`, `team_chat:read:user_message` et
+   `user:read:user`.
+
+Dans Vigie : Paramètres → Zoom → « Connecter Zoom… », y coller le **Public
+Client ID**, puis autoriser l'application dans le navigateur. Le jeton est
+conservé dans le Gestionnaire d'identifications Windows et renouvelé tout seul.
+
 ## Comportement
 
 - Sonnerie en boucle jusqu'à un clic. Fermer la fenêtre par la croix vaut
@@ -154,6 +193,8 @@ Clic droit sur l'icône → « Paramètres… » :
     journée », fréquence de relecture des agendas.
 - **Slack** : connexion, déclencheurs, son et alarme, horaires, personnes VIP
   (voir [Alertes Slack](#alertes-slack)).
+- **Zoom** : connexion, déclencheurs, son, horaires (voir
+  [Alertes Zoom](#alertes-zoom)).
 
 Les réglages sont enregistrés dans `%LOCALAPPDATA%\vigie\config.json`.
 `my_emails` (adresses servant à reconnaître vos invitations) ne se change que

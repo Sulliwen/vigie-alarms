@@ -10,6 +10,7 @@ import icalendar
 import slack_alerts
 import texts
 import vigie
+import zoom_alerts
 from vigie import Event, due_events, extract_events
 
 ICS = """BEGIN:VCALENDAR
@@ -271,6 +272,68 @@ class SlackRulesTest(unittest.TestCase):
         self.assertEqual(watcher.unseen([read, unread, unknown]), [unread, unknown])
 
 
+class ZoomRulesTest(unittest.TestCase):
+    me = {"zid", "me@x.test", "mid"}
+
+    def triggers(self, kind="channel", name="dev", keywords=(), channels=(), replies_to_me=False, **message):
+        message = {"id": "m1", "sender": "ana@x.test", "message": "hello", "timestamp": 1, **message}
+        return set(zoom_alerts.triggers_of(message, self.me, kind, name, keywords, channels, replies_to_me))
+
+    def test_each_trigger_is_recognised(self):
+        mention = {"at_type": zoom_alerts.AT_CONTACT, "at_contact": "ZID"}
+        everyone = {"at_type": zoom_alerts.AT_ALL, "at_contact": ""}
+        other = {"at_type": zoom_alerts.AT_CONTACT, "at_contact": "someone"}
+        self.assertEqual(self.triggers("dm", "ana@x.test"), {"dm"})
+        self.assertEqual(self.triggers(at_items=[mention]), {"mention"})
+        self.assertEqual(self.triggers(at_items=[{"at_type": 1, "at_contact_member_id": "mid"}]), {"mention"})
+        self.assertEqual(self.triggers(at_items=[other]), set())
+        self.assertEqual(self.triggers(at_items=[everyone]), {"broadcast"})
+        self.assertEqual(self.triggers(replies_to_me=True), {"reply"})
+        self.assertEqual(self.triggers(message="Prod is down", keywords=["prod"]), {"keyword"})
+        self.assertEqual(self.triggers(channels=["#Dev"]), {"channel"})
+        self.assertEqual(self.triggers(channels=["*"]), {"channel"})
+        self.assertEqual(self.triggers("dm", "ana@x.test", channels=["*"]), {"dm"})
+        self.assertEqual(self.triggers(), set())
+
+    def test_own_messages_never_match(self):
+        self.assertEqual(self.triggers("dm", sender="ME@x.test"), set())
+        self.assertEqual(self.triggers(send_member_id="mid", at_items=[{"at_type": 2}]), set())
+        self.assertFalse(zoom_alerts.is_vip({"sender": "me@x.test", "sender_display_name": "Jakez"}, self.me, ["Jakez"]))
+
+    def test_vip_people_are_matched_by_their_display_name(self):
+        message = {"sender": "j@x.test", "sender_display_name": "Rolland Jakez"}
+        self.assertTrue(zoom_alerts.is_vip(message, self.me, ["Jakez Rolland"]))
+        self.assertFalse(zoom_alerts.is_vip(message, self.me, ["Jakez"]))
+
+    def watcher(self, pages, **options):
+        received = []
+        watcher = zoom_alerts.ZoomWatcher("cid", "rt", save_token=None, on_message=received.append, **options)
+        watcher.me = set(self.me)
+        watcher.started_ms = 1000
+        watcher.get = lambda path, **params: pages.pop(0) if path.endswith("/messages") else {"sender": "me@x.test"}
+        return watcher, received
+
+    def test_only_new_messages_are_handed_on_once(self):
+        old = {"id": "a", "sender": "ana@x.test", "timestamp": 900, "message": "prod"}
+        new = {"id": "b", "sender": "ana@x.test", "timestamp": 2000, "message": "prod"}
+        newer = {"id": "c", "sender": "ana@x.test", "timestamp": 3000, "message": "prod"}
+        watcher, received = self.watcher([{"messages": [new, old]}, {"messages": [newer, new]}], keywords=["prod"])
+        watcher.read("channel", "C1", "dev")
+        watcher.read("channel", "C1", "dev")
+        self.assertEqual([message.id for message in received], ["b", "c"])
+        self.assertEqual(watcher.read_up_to["C1"], 3000)
+
+    def test_a_reply_to_one_of_my_messages_and_my_member_id_are_recognised(self):
+        mine = {"id": "p", "sender": "me@x.test", "send_member_id": "mid2", "timestamp": 2000}
+        reply = {"id": "r", "sender": "ana@x.test", "timestamp": 2001, "reply_main_message_id": "p",
+                 "sender_display_name": "Ana"}
+        watcher, received = self.watcher([{"messages": [reply, mine]}])
+        watcher.read("channel", "C1", "dev")
+        (message,) = received
+        self.assertEqual((message.triggers, message.author, message.in_thread), ({"reply"}, "Ana", True))
+        self.assertIn("mid2", watcher.me)
+
+
 class VersionTest(unittest.TestCase):
     def test_version_is_major_minor_patch(self):
         self.assertRegex(vigie.__version__, r"^\d+\.\d+\.\d+$")
@@ -320,6 +383,12 @@ class ConfigTest(unittest.TestCase):
         with mock.patch("vigie.load_json", return_value={}):
             self.assertFalse(vigie.load_config()["slack_vip_enabled"])
 
+    def test_older_files_get_the_zoom_triggers(self):
+        with mock.patch("vigie.load_json", return_value={"zoom_actions": {"channel": "sound"}}):
+            config = vigie.load_config()
+        self.assertEqual(config["zoom_actions"]["channel"], "sound")
+        self.assertEqual(config["zoom_actions"]["mention"], "sound")
+
     def test_forget_also_removes_the_slack_tokens(self):
         with (
             mock.patch("vigie.load_json", return_value={"accounts": [{"id": "a1"}]}),
@@ -327,7 +396,7 @@ class ConfigTest(unittest.TestCase):
         ):
             vigie.forget()
         removed = {call.args[0] for call in keyring.delete_password.call_args_list}
-        self.assertEqual(removed, {"vigie:a1", "vigie:slack:app", "vigie:slack:user"})
+        self.assertEqual(removed, {"vigie:a1", "vigie:slack:app", "vigie:slack:user", "vigie:zoom"})
 
     def test_default_accounts_are_not_shared_between_configurations(self):
         with mock.patch("vigie.load_json", return_value={}):
@@ -734,11 +803,11 @@ class AppTest(unittest.TestCase):
     def test_slack_stays_quiet_outside_the_alert_hours(self):
         config = {**self.app.config, "slack_hours_only": True, "slack_hours": [8, 19], "slack_weekdays_only": True}
         monday, saturday = datetime(2026, 10, 12), datetime(2026, 10, 17)
-        self.assertTrue(vigie.slack_hours_open(config, monday.replace(hour=8)))
-        self.assertFalse(vigie.slack_hours_open(config, monday.replace(hour=19)))
-        self.assertFalse(vigie.slack_hours_open(config, saturday.replace(hour=10)))
-        self.assertTrue(vigie.slack_hours_open({**config, "slack_hours": [22, 6]}, monday.replace(hour=2)))
-        self.assertTrue(vigie.slack_hours_open({**config, "slack_hours_only": False}, monday.replace(hour=23)))
+        self.assertTrue(vigie.hours_open(config, monday.replace(hour=8)))
+        self.assertFalse(vigie.hours_open(config, monday.replace(hour=19)))
+        self.assertFalse(vigie.hours_open(config, saturday.replace(hour=10)))
+        self.assertTrue(vigie.hours_open({**config, "slack_hours": [22, 6]}, monday.replace(hour=2)))
+        self.assertTrue(vigie.hours_open({**config, "slack_hours_only": False}, monday.replace(hour=23)))
         self.connect_slack(unseen=lambda messages: messages)
         self.app.config.update(slack_hours_only=True, slack_hours=[0, 0])
         self.app.slack_received(self.slack_message("100.0"))
@@ -815,6 +884,59 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.app.config["slack_keywords"], ["urgent"])
         self.assertEqual(self.app.config["alert_mode"], "ring")
         self.assertTrue(self.app.config["slack_vip_sound"].lower().endswith(".wav"))
+
+    # --- Zoom
+
+    def test_zoom_settings_are_saved(self):
+        self.app.show_settings()
+        dialog = self.app.dialogs["settings"]
+        dialog.zoom_enabled.set(True)
+        dialog.zoom_actions["channel"].current(vigie.ZOOM_ACTIONS.index("sound"))
+        dialog.zoom_lists["channel"].insert(0, "*")
+        dialog.zoom_lists["dm"].insert(0, "Ana@X.test, ")
+        with (
+            mock.patch("vigie.autostart_command", return_value=None),
+            mock.patch.object(self.app, "start_slack"),
+            mock.patch.object(self.app, "start_zoom") as start_zoom,
+        ):
+            dialog.submit()
+        start_zoom.assert_called_once()
+        config = self.app.config
+        self.assertTrue(config["zoom_enabled"])
+        self.assertEqual((config["zoom_actions"]["channel"], config["zoom_actions"]["mention"]), ("sound", "sound"))
+        self.assertEqual((config["zoom_channels"], config["zoom_contacts"]), (["*"], ["ana@x.test"]))
+        self.assertEqual(config["zoom_hours"], [8, 19])
+
+    def zoom_message(self, *triggers, vip=False):
+        return zoom_alerts.ZoomMessage("m1", "Jakez", "channel", "dev", False, vip=vip, triggers=frozenset(triggers))
+
+    def test_a_zoom_message_plays_its_sound_and_never_rings(self):
+        self.app.config["zoom_actions"] = {**self.app.config["zoom_actions"], "channel": "sound"}
+        with mock.patch("vigie.play_once") as play_once:
+            self.app.on_zoom_message(self.zoom_message("keyword"))
+            play_once.assert_not_called()
+            self.app.on_zoom_message(self.zoom_message("channel", "keyword"))
+        play_once.assert_called_once_with(self.app.config["zoom_sound"])
+        self.assertFalse(self.app.windows)
+
+    def test_zoom_vip_messages_are_announced_like_slack_ones(self):
+        self.app.config["slack_vip_enabled"] = True
+        with mock.patch("vigie.announce") as announce, mock.patch("vigie.play_once") as play_once:
+            self.app.on_zoom_message(self.zoom_message(vip=True))
+        announce.assert_called_once_with(self.app.config["slack_vip_sound"], "Message VIP", with_sound=True)
+        play_once.assert_not_called()
+
+    def test_zoom_stays_silent_outside_its_hours(self):
+        self.app.config.update(zoom_hours_only=True, zoom_hours=[0, 0])
+        self.app.zoom_received(self.zoom_message("dm"))
+        self.assertTrue(self.app.inbox.empty())
+
+    def test_a_refused_zoom_authorization_asks_for_a_new_one(self):
+        self.app.zoom = mock.Mock()
+        self.app.zoom.thread.is_alive.return_value = False
+        self.app.zoom_state = "connected"
+        self.app.zoom_tick()
+        self.assertEqual((self.app.zoom, self.app.zoom_state), (None, "no_tokens"))
 
     # --- agenda
 

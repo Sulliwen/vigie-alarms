@@ -35,6 +35,11 @@ Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
   suivis ; sonnerie d'alarme et coupure du son propres à Slack ; horaires et
   jours d'alerte ; « Ne pas déranger » désactivable ; section VIP dépliable,
   désactivable, avec phrase et voix au choix.
+- Alertes Zoom Team Chat : un son pour les mentions, les réponses à vos
+  messages, `@all`, des mots-clés, des canaux suivis et les messages privés de
+  contacts choisis ; personnes VIP partagées avec Slack ; onglet Zoom dans les
+  Paramètres, connexion par le navigateur. Pas d'alarme si non lu (Zoom ne le
+  dit pas), environ 30 secondes de délai.
 - Mode développement (`dev.ps1`) : lancement depuis le code, redémarrage
   automatique à chaque modification.
 

@@ -47,7 +47,9 @@ from PIL import Image, ImageDraw, ImageTk
 
 import slack_alerts
 import texts
+import zoom_alerts
 from slack_alerts import SlackWatcher
+from zoom_alerts import ZoomWatcher
 from texts import PROVIDERS, t
 
 # MAJOR.MINOR.PATCH (semver.org): PATCH for a fix, MINOR for a new feature, MAJOR when an update
@@ -57,7 +59,7 @@ __version__ = "1.0.0"
 APP = "vigie"
 # --dev: run from the sources and restart by itself whenever they change.
 DEV = "--dev" in sys.argv
-SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py", "slack_alerts.py")]
+SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py", "slack_alerts.py", "zoom_alerts.py")]
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
@@ -116,6 +118,26 @@ DEFAULT_CONFIG = {
     "slack_vip_voice": True,
     # None: the phrase of the interface language.
     "slack_vip_phrase": None,
+    # Zoom Team Chat: what each trigger does (ZOOM_ACTIONS). Zoom cannot tell whether a message was read,
+    # so there is no alarm. VIP people are those of Slack.
+    "zoom_enabled": False,
+    "zoom_actions": {
+        "dm": "sound",
+        "mention": "sound",
+        "reply": "none",
+        "broadcast": "none",
+        "keyword": "none",
+        "channel": "none",
+    },
+    "zoom_keywords": [],
+    # Channel names; "*" watches them all.
+    "zoom_channels": [],
+    # Email addresses of the contacts whose direct messages are read.
+    "zoom_contacts": [],
+    "zoom_sound": r"C:\Windows\Media\Windows Notify Calendar.wav",
+    "zoom_hours_only": False,
+    "zoom_hours": [8, 19],
+    "zoom_weekdays_only": False,
     # An event found after it started still rings during this many minutes.
     "late_grace_minutes": 5,
     "poll_seconds": 60,
@@ -126,6 +148,7 @@ DEFAULT_CONFIG = {
 
 SILENCE_CHOICES = [0, 1, 2, 5, 10]
 SLACK_ACTIONS = ("none", "sound", "alarm", "sound_alarm")
+ZOOM_ACTIONS = ("none", "sound")
 START_SUFFIX = "|start"
 POLL_CHOICES = [60, 120, 300]
 RETRY_SECONDS = 15
@@ -242,11 +265,38 @@ def delete_slack_tokens():
             pass
 
 
+ZOOM_SERVICE = f"{APP}:zoom"
+
+
+def zoom_credentials():
+    """(client id, refresh token), or None until Zoom has been connected."""
+    credentials = tuple(keyring.get_password(ZOOM_SERVICE, name) for name in ("client_id", "refresh_token"))
+    return credentials if all(credentials) else None
+
+
+def set_zoom_credentials(client_id, refresh_token):
+    keyring.set_password(ZOOM_SERVICE, "client_id", client_id)
+    keyring.set_password(ZOOM_SERVICE, "refresh_token", refresh_token)
+
+
+def save_zoom_token(refresh_token):
+    keyring.set_password(ZOOM_SERVICE, "refresh_token", refresh_token)
+
+
+def delete_zoom_credentials():
+    for name in ("client_id", "refresh_token"):
+        try:
+            keyring.delete_password(ZOOM_SERVICE, name)
+        except keyring.errors.PasswordDeleteError:
+            pass
+
+
 def load_config():
     stored = load_json(CONFIG_PATH, {})
     config = {**copy.deepcopy(DEFAULT_CONFIG), **stored}
     # New triggers keep their default when an older file lists only some of them.
     config["slack_actions"] = {**DEFAULT_CONFIG["slack_actions"], **stored.get("slack_actions", {})}
+    config["zoom_actions"] = {**DEFAULT_CONFIG["zoom_actions"], **stored.get("zoom_actions", {})}
     # Before the switch existed, listing names was enough to turn VIP announcements on.
     if "slack_vip_enabled" not in stored and stored.get("slack_vip_names"):
         config["slack_vip_enabled"] = True
@@ -395,13 +445,13 @@ def slack_action(actions, triggers):
     return any("sound" in action for action in chosen), any("alarm" in action for action in chosen)
 
 
-def slack_hours_open(config, now):
-    """Whether Slack may make a noise now, given the alert hours and days."""
-    if config["slack_weekdays_only"] and now.weekday() >= 5:
+def hours_open(config, now, service="slack"):
+    """Whether Slack (or Zoom) may make a noise now, given its alert hours and days."""
+    if config[f"{service}_weekdays_only"] and now.weekday() >= 5:
         return False
-    if not config["slack_hours_only"]:
+    if not config[f"{service}_hours_only"]:
         return True
-    start, end = config["slack_hours"]
+    start, end = config[f"{service}_hours"]
     # 22 to 6 runs over midnight.
     return start <= now.hour < end if start <= end else (now.hour >= start or now.hour < end)
 
@@ -904,7 +954,7 @@ class AccountsDialog(Dialog):
 
 
 class SettingsDialog(Dialog):
-    """Three tabs: General, Agenda (appointments only) and Slack (Slack only)."""
+    """Four tabs: General, Agenda (appointments only), Slack and Zoom."""
 
     def __init__(self, app):
         super().__init__(app, "settings", t("title_settings"), t("settings_intro"))
@@ -916,6 +966,7 @@ class SettingsDialog(Dialog):
         self.build_general(app.config)
         self.build_agenda(app.config)
         self.build_slack(app.config)
+        self.build_zoom(app.config)
 
         self.label(self.footer, f"Vigie {__version__}", font=(FONT, 9), fg=COLOR_MUTED).pack(side="left")
         button(self.footer, t("cancel"), self.close).pack(side="right")
@@ -987,24 +1038,10 @@ class SettingsDialog(Dialog):
         self.slack_enabled = self.checkbox(t("slack_enable"), config["slack_enabled"])
 
         self.section(t("section_slack_triggers"))
-        table = tk.Frame(self.grid, bg="white")
-        table.grid(row=self.next_row, column=0, columnspan=3, sticky="w")
-        self.next_row += 1
-        self.label(table, t("slack_action_header"), font=(FONT, 9), fg=COLOR_MUTED).grid(row=0, column=2, sticky="w")
-        action_names = [t(f"slack_action_{action}") for action in SLACK_ACTIONS]
-        self.slack_actions = {}
         lists = {"keyword": config["slack_keywords"], "channel": config["slack_channels"]}
-        self.slack_lists = {}
-        for row, trigger in enumerate(slack_alerts.TRIGGERS, 1):
-            self.label(table, t(f"slack_trigger_{trigger}")).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
-            if trigger in lists:
-                self.slack_lists[trigger] = self.entry(table, ", ".join(lists[trigger]), width=18)
-                self.slack_lists[trigger].grid(row=row, column=1, sticky="w", padx=(0, 12), ipady=2)
-            combobox = ttk.Combobox(table, state="readonly", values=action_names, width=22, font=(FONT, 10))
-            action = config["slack_actions"].get(trigger, "none")
-            combobox.set(action_names[SLACK_ACTIONS.index(action if action in SLACK_ACTIONS else "none")])
-            combobox.grid(row=row, column=2, sticky="w", pady=3)
-            self.slack_actions[trigger] = combobox
+        self.slack_actions, self.slack_lists = self.trigger_table(
+            "slack", slack_alerts.TRIGGERS, SLACK_ACTIONS, config["slack_actions"], lists
+        )
         self.hint(t("slack_triggers_hint"))
 
         self.column(1)
@@ -1028,16 +1065,7 @@ class SettingsDialog(Dialog):
 
         self.section(t("section_slack_when"))
         self.slack_respect_dnd = self.checkbox(t("slack_respect_dnd"), config["slack_respect_dnd"])
-        hours = tk.Frame(self.grid, bg="white")
-        hours.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
-        self.next_row += 1
-        self.slack_hours_only = tk.BooleanVar(self, value=config["slack_hours_only"])
-        self.check(hours, t("slack_hours_from"), self.slack_hours_only).pack(side="left")
-        self.slack_hour_start = self.spin(hours, config["slack_hours"][0], 0, 23)
-        self.label(hours, t("slack_hours_to")).pack(side="left", padx=6)
-        self.slack_hour_end = self.spin(hours, config["slack_hours"][1], 0, 24)
-        self.label(hours, t("slack_hours_unit")).pack(side="left", padx=(6, 0))
-        self.slack_weekdays_only = self.checkbox(t("slack_weekdays_only"), config["slack_weekdays_only"])
+        self.slack_hours = self.hours_rows(config, "slack")
 
         # VIP people: a section of its own, folded until asked for.
         toggle = button(self.grid, "", self.toggle_vip, "link", font=(FONT, 10, "bold"))
@@ -1069,7 +1097,74 @@ class SettingsDialog(Dialog):
         self.vip_open = False
         self.show_vip()
 
+    def build_zoom(self, config):
+        self.tab(t("tab_zoom"))
+        self.section(t("section_connection"))
+        status = tk.Frame(self.grid, bg="white")
+        self.label(status, self.app.zoom_status_text(), fg=COLOR_MUTED).pack(side="left")
+        button(status, t("zoom_connect_button"), self.app.ask_zoom_connection, "link").pack(side="left", padx=(8, 0))
+        self.place(t("slack_status_label"), status)
+        self.zoom_enabled = self.checkbox(t("zoom_enable"), config["zoom_enabled"])
+
+        self.section(t("section_slack_triggers"))
+        lists = {"dm": config["zoom_contacts"], "keyword": config["zoom_keywords"], "channel": config["zoom_channels"]}
+        self.zoom_actions, self.zoom_lists = self.trigger_table(
+            "zoom", zoom_alerts.TRIGGERS, ZOOM_ACTIONS, config["zoom_actions"], lists
+        )
+        self.hint(t("zoom_triggers_hint"))
+
+        self.section(t("section_sound"))
+        self.zoom_sounds, chosen = sound_choices(notification_sounds(), config["zoom_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.zoom_sound = self.choice(t("slack_sound_label"), list(self.zoom_sounds), chosen, extras, width=25)
+        button(extras, t("sound_preview"), lambda: self.preview(self.zoom_sounds[self.zoom_sound.get()]), "link").pack(
+            side="left"
+        )
+
+        self.section(t("section_slack_when"))
+        self.zoom_hours = self.hours_rows(config, "zoom")
+        self.hint(t("zoom_vip_hint"))
+
     # --- building blocks: one setting per row of the grid
+
+    def trigger_table(self, service, triggers, actions, chosen, lists):
+        """One row per trigger: its name, a list to fill for some, and what it does.
+        Returns ({trigger: combobox}, {trigger: entry})."""
+        table = tk.Frame(self.grid, bg="white")
+        table.grid(row=self.next_row, column=0, columnspan=3, sticky="w")
+        self.next_row += 1
+        self.label(table, t("slack_action_header"), font=(FONT, 9), fg=COLOR_MUTED).grid(row=0, column=2, sticky="w")
+        action_names = [t(f"slack_action_{action}") for action in actions]
+        boxes, entries = {}, {}
+        for row, trigger in enumerate(triggers, 1):
+            self.label(table, t(f"{service}_trigger_{trigger}")).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+            if trigger in lists:
+                entries[trigger] = self.entry(table, ", ".join(lists[trigger]), width=18)
+                entries[trigger].grid(row=row, column=1, sticky="w", padx=(0, 12), ipady=2)
+            combobox = ttk.Combobox(table, state="readonly", values=action_names, width=22, font=(FONT, 10))
+            action = chosen.get(trigger, "none")
+            combobox.set(action_names[actions.index(action if action in actions else "none")])
+            combobox.grid(row=row, column=2, sticky="w", pady=3)
+            boxes[trigger] = combobox
+        return boxes, entries
+
+    def hours_rows(self, config, service):
+        """"Only from x to y o'clock" and "only Monday to Friday"; returns a function reading them."""
+        hours = tk.Frame(self.grid, bg="white")
+        hours.grid(row=self.next_row, column=0, columnspan=3, sticky="w", pady=3)
+        self.next_row += 1
+        only = tk.BooleanVar(self, value=config[f"{service}_hours_only"])
+        self.check(hours, t("slack_hours_from"), only).pack(side="left")
+        start = self.spin(hours, config[f"{service}_hours"][0], 0, 23)
+        self.label(hours, t("slack_hours_to")).pack(side="left", padx=6)
+        end = self.spin(hours, config[f"{service}_hours"][1], 0, 24)
+        self.label(hours, t("slack_hours_unit")).pack(side="left", padx=(6, 0))
+        weekdays = self.checkbox(t("slack_weekdays_only"), config[f"{service}_weekdays_only"])
+        return lambda: {
+            f"{service}_hours_only": only.get(),
+            f"{service}_hours": [start(), end()],
+            f"{service}_weekdays_only": weekdays.get(),
+        }
 
     def place(self, label, control, extra=None):
         if label:
@@ -1212,15 +1307,20 @@ class SettingsDialog(Dialog):
             "slack_alarm_sound": self.slack_alarm_sounds[self.slack_alarm_sound.get()],
             "slack_silence_after_minutes": SILENCE_CHOICES[self.slack_silence.current()],
             "slack_respect_dnd": self.slack_respect_dnd.get(),
-            "slack_hours_only": self.slack_hours_only.get(),
-            "slack_hours": [self.slack_hour_start(), self.slack_hour_end()],
-            "slack_weekdays_only": self.slack_weekdays_only.get(),
+            **self.slack_hours(),
             "slack_vip_enabled": self.slack_vip_enabled.get(),
             "slack_vip_names": names(self.slack_vip),
             "slack_vip_sound": self.vip_sounds[self.slack_vip_sound.get()],
             "slack_vip_voice": self.slack_vip_voice.get(),
             # The default phrase is not stored, so that it follows the language.
             "slack_vip_phrase": None if phrase in ("", t("slack_vip_voice")) else phrase,
+            "zoom_enabled": self.zoom_enabled.get(),
+            "zoom_actions": {trigger: ZOOM_ACTIONS[box.current()] for trigger, box in self.zoom_actions.items()},
+            "zoom_contacts": [name.lower() for name in names(self.zoom_lists["dm"])],
+            "zoom_keywords": names(self.zoom_lists["keyword"]),
+            "zoom_channels": [name.lstrip("#") for name in names(self.zoom_lists["channel"])],
+            "zoom_sound": self.zoom_sounds[self.zoom_sound.get()],
+            **self.zoom_hours(),
         }
         autostart = self.autostart.get()
         self.close()
@@ -1252,6 +1352,38 @@ class SlackTokensDialog(Dialog):
 
     def save(self, app_token, user_token):
         self.app.save_slack_tokens(app_token, user_token)
+
+
+class ZoomConnectDialog(Dialog):
+    """Asks for the Public Client ID of the user's Zoom app, then has them authorize it in the browser."""
+
+    def __init__(self, app):
+        super().__init__(app, "zoom", t("zoom_connect_title"), t("zoom_connect_help", redirect=zoom_alerts.REDIRECT))
+        grid = tk.Frame(self.frame, bg="white")
+        grid.pack(anchor="w")
+        saved = zoom_credentials()
+        self.client_id = self.field(grid, 0, t("zoom_client_id"), saved[0] if saved else "")
+        self.buttons(t("zoom_connect_submit"), self.submit)
+        self.bind("<Return>", lambda _: self.submit())
+        self.client_id.focus_set()
+
+    def submit(self):
+        client_id = self.client_id.get().strip()
+        if not client_id:
+            self.status.config(text=t("zoom_client_id_missing"), fg=COLOR_ERROR)
+            return
+        self.test(self.check, client_id)
+        self.status.config(text=t("zoom_waiting"))
+
+    def check(self, client_id):
+        try:
+            self.refresh_token = zoom_alerts.authorize(client_id, t("zoom_done_page"))
+        except zoom_alerts.ZoomAuthError as exc:
+            return t("zoom_error", error=exc)
+        return None
+
+    def save(self, client_id):
+        self.app.save_zoom_credentials(client_id, self.refresh_token)
 
 
 class SlackAlarmWindow(tk.Toplevel):
@@ -1583,6 +1715,9 @@ class App:
         self.slack_retry_at = 0.0
         self.slack_recheck_at = 0.0
         self.vip_announced = {}
+        self.zoom = None
+        self.zoom_state = "off"
+        self.zoom_retry_at = 0.0
 
     # --- plumbing -------------------------------------------------------
 
@@ -1603,6 +1738,12 @@ class App:
                 None,
                 enabled=False,
                 visible=lambda _: self.config["slack_enabled"],
+            ),
+            pystray.MenuItem(
+                lambda _: t("zoom_menu_status", state=self.zoom_status_text()),
+                None,
+                enabled=False,
+                visible=lambda _: self.config["zoom_enabled"],
             ),
             pystray.Menu.SEPARATOR,
             # Hidden: it gives a plain click on the icon its action, without a bold entry in the menu.
@@ -1627,6 +1768,7 @@ class App:
         if DEV:
             threading.Thread(target=watch_sources, args=(partial(self.post, self.restart),), daemon=True).start()
         self.start_slack()
+        self.start_zoom()
         if not self.config["accounts"]:
             self.show_accounts()
         self.root.after(TICK_MS, self.tick)
@@ -1635,6 +1777,7 @@ class App:
     def quit(self):
         self.set_sound(False)
         self.stop_slack()
+        self.stop_zoom()
         self.tray.stop()
         self.root.destroy()
 
@@ -1672,6 +1815,9 @@ class App:
         self.start_slack()
         if self.config["slack_enabled"] and slack_tokens() is None:
             self.ask_slack_tokens()
+        self.start_zoom()
+        if self.config["zoom_enabled"] and zoom_credentials() is None:
+            self.ask_zoom_connection()
 
     # --- Slack ----------------------------------------------------------
 
@@ -1736,7 +1882,7 @@ class App:
 
     def slack_received(self, message):
         """Called by the Slack connection, off the UI thread: quiet hours and "Do not disturb" silence everything."""
-        if not slack_hours_open(self.config, datetime.now()):
+        if not hours_open(self.config, datetime.now()):
             log.info("slack: outside alert hours, message ignored")
             return
         if self.config["slack_respect_dnd"] and self.slack is not None and self.slack.do_not_disturb():
@@ -1770,7 +1916,7 @@ class App:
         if now - self.vip_announced.get(message.author, 0.0) < VIP_QUIET_SECONDS:
             return
         self.vip_announced[message.author] = now
-        log.info("slack: VIP message announced")
+        log.info("VIP message announced")
         # Over a ringing alarm, the voice alone: a new sound would stop the alarm's.
         phrase = vip_phrase(self.config) if self.config["slack_vip_voice"] else None
         announce(self.config["slack_vip_sound"], phrase, with_sound=not self.sound_playing)
@@ -1819,6 +1965,100 @@ class App:
         log.info("slack: tokens saved")
         self.save_config()
         self.start_slack()
+
+    # --- Zoom -----------------------------------------------------------
+
+    def start_zoom(self):
+        self.stop_zoom()
+        credentials = zoom_credentials()
+        if not self.config["zoom_enabled"]:
+            self.zoom_state = "off"
+            return
+        if credentials is None:
+            self.zoom_state = "no_tokens"
+            return
+        config = self.config
+        watcher = ZoomWatcher(
+            *credentials,
+            save_token=save_zoom_token,
+            on_message=self.zoom_received,
+            vip_names=config["slack_vip_names"] if config["slack_vip_enabled"] else (),
+            keywords=config["zoom_keywords"],
+            channels=config["zoom_channels"],
+            contacts=config["zoom_contacts"] if config["zoom_actions"]["dm"] != "none" else (),
+        )
+        self.zoom_state = "connecting"
+
+        def connect():
+            try:
+                watcher.start()
+                return watcher, None
+            except zoom_alerts.ZoomAuthError as exc:
+                return watcher, ("refused", exc)
+            except Exception as exc:
+                return watcher, ("network", exc)
+
+        self.background(connect, self.zoom_started)
+
+    def zoom_started(self, result):
+        watcher, error = result
+        if error is None:
+            self.zoom, self.zoom_state = watcher, "connected"
+        elif error[0] == "refused":
+            log.warning("zoom: authorization refused (%s)", error[1])
+            self.zoom_state = "no_tokens"
+        else:
+            log.warning("zoom: cannot connect: %r", error[1])
+            self.zoom_state = "disconnected"
+            self.zoom_retry_at = time.time() + 60
+        self.refresh_tray()
+
+    def stop_zoom(self):
+        if self.zoom is not None:
+            self.zoom.stop()
+            self.zoom = None
+
+    def zoom_status_text(self):
+        state = self.zoom_state
+        if state == "connected" and not (self.zoom and self.zoom.connected()):
+            state = "disconnected"
+        return t(f"slack_status_{state}")
+
+    def zoom_received(self, message):
+        """Called by the Zoom watcher, off the UI thread."""
+        if not hours_open(self.config, datetime.now(), "zoom"):
+            log.info("zoom: outside alert hours, message ignored")
+            return
+        self.post(partial(self.on_zoom_message, message))
+
+    def on_zoom_message(self, message):
+        if message.vip and self.config["slack_vip_enabled"]:
+            self.announce_vip(message)
+            return
+        if not any(self.config["zoom_actions"].get(trigger) == "sound" for trigger in message.triggers):
+            return
+        log.info("zoom: message (%s) -> sound", ", ".join(sorted(message.triggers)))
+        if not self.sound_playing:
+            play_once(self.config["zoom_sound"])
+
+    def zoom_tick(self):
+        if self.zoom_state == "disconnected" and time.time() >= self.zoom_retry_at:
+            self.start_zoom()
+        elif self.zoom is not None and not self.zoom.thread.is_alive():
+            # The watcher gives up when Zoom refuses the authorization: it has to be given again.
+            self.stop_zoom()
+            self.zoom_state = "no_tokens"
+            self.refresh_tray()
+
+    def ask_zoom_connection(self):
+        self.open("zoom", lambda: ZoomConnectDialog(self))
+
+    def save_zoom_credentials(self, client_id, refresh_token):
+        set_zoom_credentials(client_id, refresh_token)
+        self.config["zoom_enabled"] = True
+        log.info("zoom: connected by the user")
+        self.save_config()
+        self.start_zoom()
 
     # --- accounts -------------------------------------------------------
 
@@ -2030,6 +2270,7 @@ class App:
                 self.ring(event)
 
         self.slack_tick(now)
+        self.zoom_tick()
 
         # The calendar's setting while an appointment rings, Slack's otherwise.
         calendar_ringing = any(isinstance(window, AlarmWindow) for window in self.windows.values())
@@ -2206,6 +2447,7 @@ def forget():
     for account in load_config()["accounts"]:
         delete_secret(account)
     delete_slack_tokens()
+    delete_zoom_credentials()
 
 
 _instance_lock = None

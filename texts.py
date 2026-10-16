@@ -111,7 +111,7 @@ STRINGS = {
         ),
         # Settings
         "title_settings": "Paramètres",
-        "settings_intro": "Options générales, alertes des rendez-vous et alertes Slack",
+        "settings_intro": "Options générales, alertes des rendez-vous, de Slack et de Zoom",
         "tab_general": "Général",
         "tab_agenda": "Agenda",
         "tab_slack": "Slack",
@@ -214,6 +214,35 @@ STRINGS = {
         "slack_group": "Conversation de groupe",
         "slack_thread": "dans un fil",
         "open_slack": "Ouvrir Slack",
+        # Zoom
+        "tab_zoom": "Zoom",
+        "zoom_enable": "Activer les alertes Zoom",
+        "zoom_connect_button": "Connecter Zoom…",
+        "zoom_trigger_dm": "Messages privés de",
+        "zoom_trigger_mention": "Mention @moi",
+        "zoom_trigger_reply": "Réponse à vos messages",
+        "zoom_trigger_broadcast": "@all",
+        "zoom_trigger_keyword": "Mots-clés",
+        "zoom_trigger_channel": "Canaux suivis",
+        "zoom_triggers_hint": (
+            "Messages privés : adresses e-mail des contacts, séparées par des virgules. Canaux suivis : leurs noms, "
+            "ou * pour tous. Zoom ne dit pas si un message a été lu : pas d'alarme, seulement un son, environ "
+            "30 secondes après le message."
+        ),
+        "zoom_vip_hint": "Les personnes VIP sont celles de l'onglet Slack ; leurs messages Zoom sont annoncés de la même façon.",
+        "zoom_menu_status": "Zoom : {state}",
+        "zoom_connect_title": "Connecter Zoom",
+        "zoom_connect_help": (
+            "Le Public Client ID de votre application Zoom « Vigie » (marketplace.zoom.us, page Basic Information, "
+            "« Use Public Client OAuth » activé, adresse de redirection {redirect}). Le navigateur s'ouvre ensuite "
+            "pour que vous autorisiez l'application."
+        ),
+        "zoom_client_id": "Public Client ID",
+        "zoom_connect_submit": "Se connecter",
+        "zoom_client_id_missing": "Saisissez le Public Client ID.",
+        "zoom_waiting": "Autorisez l'application dans le navigateur (5 minutes au plus)…",
+        "zoom_error": "Zoom refuse l'autorisation : {error}",
+        "zoom_done_page": "Vigie est connectée à Zoom. Vous pouvez fermer cet onglet.",
         # Account states
         "synced_at": "Synchronisé à {time}",
         "failing": "En échec : {error}",
@@ -346,7 +375,7 @@ STRINGS = {
         ),
         # Settings
         "title_settings": "Settings",
-        "settings_intro": "General options, appointment alerts and Slack alerts",
+        "settings_intro": "General options, appointment, Slack and Zoom alerts",
         "tab_general": "General",
         "tab_agenda": "Agenda",
         "tab_slack": "Slack",
@@ -448,6 +477,34 @@ STRINGS = {
         "slack_group": "Group conversation",
         "slack_thread": "in a thread",
         "open_slack": "Open Slack",
+        # Zoom
+        "tab_zoom": "Zoom",
+        "zoom_enable": "Turn Zoom alerts on",
+        "zoom_connect_button": "Connect Zoom…",
+        "zoom_trigger_dm": "Direct messages from",
+        "zoom_trigger_mention": "@me mention",
+        "zoom_trigger_reply": "Reply to your messages",
+        "zoom_trigger_broadcast": "@all",
+        "zoom_trigger_keyword": "Keywords",
+        "zoom_trigger_channel": "Watched channels",
+        "zoom_triggers_hint": (
+            "Direct messages: email addresses of the contacts, separated by commas. Watched channels: their names, "
+            "or * for all. Zoom does not tell whether a message was read: no alarm, only a sound, about 30 seconds "
+            "after the message."
+        ),
+        "zoom_vip_hint": "VIP people are those of the Slack tab; their Zoom messages are announced the same way.",
+        "zoom_menu_status": "Zoom: {state}",
+        "zoom_connect_title": "Connect Zoom",
+        "zoom_connect_help": (
+            "The Public Client ID of your Zoom app “Vigie” (marketplace.zoom.us, Basic Information page, “Use "
+            "Public Client OAuth” on, redirect URL {redirect}). The browser then opens for you to authorize the app."
+        ),
+        "zoom_client_id": "Public Client ID",
+        "zoom_connect_submit": "Connect",
+        "zoom_client_id_missing": "Enter the Public Client ID.",
+        "zoom_waiting": "Authorize the app in the browser (5 minutes at most)…",
+        "zoom_error": "Zoom refuses the authorization: {error}",
+        "zoom_done_page": "Vigie is connected to Zoom. You can close this tab.",
         # Account states
         "synced_at": "Synced at {time}",
         "failing": "Failing: {error}",

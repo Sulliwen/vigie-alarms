@@ -110,6 +110,44 @@ Then “Basic Information” → “App-Level Tokens” → generate a token wit
 Vigie: Settings → Slack → “Slack tokens…”, paste both tokens (`xapp-…` and
 `xoxp-…`).
 
+## Zoom alerts
+
+Vigie can also watch Zoom Team Chat, with a **sound** per trigger:
+
+| Trigger | Default |
+| --- | --- |
+| Direct messages from the listed contacts (email addresses) | Sound |
+| @me mention | Sound |
+| Reply to one of your messages | Nothing |
+| `@all` | Nothing |
+| Keywords (whole words, case ignored) | Nothing |
+| Watched channels (their names, or `*` for all): every message | Nothing |
+
+Differences with Slack:
+
+- **No alarm if unread**: Zoom's API does not tell whether a message was read.
+- **About 30 seconds of delay**: Zoom pushes nothing to a desktop program, and
+  its "recent conversations" list stays empty on some accounts. Vigie reads each
+  of your channels every 30 seconds instead, at least one second apart to stay
+  within Zoom's limit. Direct messages are read for the listed contacts only.
+- **VIP people** are those of the Slack tab; their Zoom messages are announced
+  the same way (a sound, then the voice).
+- **Hours** and alert days of its own.
+
+Setting up, once: on <https://marketplace.zoom.us>, “Develop” → “Build App” →
+“General App”:
+
+1. “Basic Information”: **User-managed**, turn **Use Public Client OAuth** on,
+   put `http://127.0.0.1:8765/callback` as “OAuth Redirect URL” and in the
+   “OAuth Allow List”.
+2. “Scopes”, read-only: `team_chat:read:list_user_channels`,
+   `team_chat:read:list_user_messages`, `team_chat:read:user_message` and
+   `user:read:user`.
+
+In Vigie: Settings → Zoom → “Connect Zoom…”, paste the **Public Client ID**,
+then authorize the app in the browser. The token is kept in the Windows
+Credential Manager and renewed on its own.
+
 ## Behaviour
 
 - The alarm loops until you click. Closing the window with the cross means
@@ -148,6 +186,7 @@ Right-click on the icon → “Settings…”:
     again.
 - **Slack**: connection, triggers, sound and alarm, hours, VIP people (see
   [Slack alerts](#slack-alerts)).
+- **Zoom**: connection, triggers, sound, hours (see [Zoom alerts](#zoom-alerts)).
 
 Settings are saved in `%LOCALAPPDATA%\vigie\config.json`. `my_emails`
 (addresses used to recognise your invitations) can only be changed in that
