@@ -748,6 +748,7 @@ class Dialog(tk.Toplevel):
 
         header = tk.Frame(self, bg="white", padx=22, pady=14)
         header.pack(fill="x")
+        self.header = header
         tk.Label(header, text=title, font=(FONT, 15, "bold"), bg="white", fg=COLOR_TEXT).pack(anchor="w")
         if subtitle:
             tk.Label(
@@ -1560,12 +1561,20 @@ class DashboardWindow(Dialog):
 
     def __init__(self, app):
         super().__init__(app, "dashboard", t("dashboard_title"))
+        # The other screens, in the header under the title.
+        menu = tk.Frame(self.header, bg="white")
+        menu.pack(anchor="w", pady=(6, 0))
+        for key, action in (
+            ("menu_agenda", app.show_agenda),
+            ("menu_accounts", app.show_accounts),
+            ("menu_settings", app.show_settings),
+            ("open_log", lambda: os.startfile(LOG_PATH)),
+        ):
+            button(menu, t(key), action, "link", font=(FONT, 10), padx=0).pack(side="left", padx=(0, 18))
         self.body = tk.Frame(self.frame, bg="white")
         self.body.pack(fill="both", expand=True)
-        button(self.footer, t("menu_agenda"), app.show_agenda).pack(side="left")
-        button(self.footer, t("menu_settings"), app.show_settings).pack(side="left", padx=(8, 0))
-        button(self.footer, t("sync_now"), app.fetcher_wake).pack(side="left", padx=(8, 0))
         button(self.footer, t("close"), self.close, "primary").pack(side="right")
+        button(self.footer, t("sync_now"), app.fetcher_wake).pack(side="right", padx=(0, 8))
         self.render()
 
     def render(self):

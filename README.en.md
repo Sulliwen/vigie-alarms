@@ -27,10 +27,11 @@ The program registers itself to start with Windows. A **click** on the icon in
 the notification area opens the **Dashboard**: the state of every calendar and
 messaging tool (green, red or grey dot), the next appointment alert, and the
 latest alerts since Vigie started (time, source, message, what was done: sound,
-alarm, VIP announcement, read in time, ignored outside hours…). Its buttons
-open the **Agenda** (every appointment of the next 7 days, grouped by day), the
-settings, or sync again. Everything else goes through a **right-click** on that
-icon: test the alarm, sync more calendars, quit. The program exists in French and
+alarm, VIP announcement, read in time, ignored outside hours…). Its header
+leads to the other screens: the **Agenda** (every appointment of the next
+7 days, grouped by day), the synced calendars, the settings and the log; at the
+bottom, “Sync now”. A right-click on the icon also gives these screens, plus
+“Test the alarm” and “Quit”. The program exists in French and
 in English.
 
 ## Supported calendars

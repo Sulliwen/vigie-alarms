@@ -30,10 +30,11 @@ l'icône de la zone de notification ouvre le **Tableau de bord** : l'état de
 chaque agenda et de chaque messagerie (pastille verte, rouge ou grise), la
 prochaine alerte de rendez-vous, et les dernières alertes depuis le démarrage
 de Vigie (heure, source, message, ce qui a été fait : son, alarme, annonce VIP,
-lu à temps, ignoré hors horaires…). Ses boutons ouvrent l'**Agenda** (tous les
-rendez-vous des 7 prochains jours, regroupés par jour), les paramètres, ou
-relancent la synchronisation. Le reste passe par un **clic droit** sur cette
-icône : tester l'alarme, synchroniser d'autres agendas, quitter. Le programme
+lu à temps, ignoré hors horaires…). Son en-tête mène aux autres écrans :
+l'**Agenda** (tous les rendez-vous des 7 prochains jours, regroupés par jour),
+les agendas synchronisés, les paramètres et le journal ; en bas, « Synchroniser
+maintenant ». Le clic droit sur l'icône donne aussi ces écrans, ainsi que
+« Tester l'alarme » et « Quitter ». Le programme
 existe en français et en anglais.
 
 ## Agendas pris en charge
