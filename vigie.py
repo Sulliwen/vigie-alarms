@@ -29,6 +29,7 @@ import urllib.request
 import uuid
 import winreg
 import winsound
+from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime, time as clock, timedelta
 from functools import partial
@@ -153,6 +154,10 @@ START_SUFFIX = "|start"
 POLL_CHOICES = [60, 120, 300]
 RETRY_SECONDS = 15
 VIP_QUIET_SECONDS = 60
+# The dashboard lists the latest alerts, kept in memory since the program started.
+HISTORY_SIZE = 30
+DASHBOARD_ROWS = 10
+DASHBOARD_REFRESH_MS = 5000
 VOICE_CULTURES = {"fr": "fr-FR", "en": "en-US"}
 TICK_MS = 500
 REDISCOVER_SECONDS = 1800
@@ -168,6 +173,8 @@ COLOR_ACCENT = "#1a73e8"
 COLOR_HIGHLIGHT = "#e8f0fe"
 COLOR_LINE = "#e3e5e8"
 COLOR_PANEL = "#f6f7f8"
+# The dot telling the state of a calendar account or a messaging tool.
+HEALTH_COLORS = {"ok": COLOR_OK, "error": COLOR_ERROR, "off": "#bdc1c6"}
 # One colour per watched calendar, in the order they were added.
 CALENDAR_COLORS = ["#1a73e8", "#e67c00", "#0b8043", "#8e24aa", "#d93025", "#00897b", "#c2185b", "#5f6368"]
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -1047,7 +1054,7 @@ class SettingsDialog(Dialog):
         frame.grid(row=0, column=0, sticky="nsew")
         item = tk.Frame(self.menu, bg=COLOR_PANEL, cursor="hand2", padx=8, pady=5)
         item.pack(fill="x")
-        dot = {"ok": COLOR_OK, "error": COLOR_ERROR, "off": "#bdc1c6"}[health] if health else COLOR_ACCENT
+        dot = HEALTH_COLORS[health] if health else COLOR_ACCENT
         parts = [
             tk.Label(item, text="●" if health else "★", font=(FONT, 10), bg=COLOR_PANEL, fg=dot),
             tk.Label(item, text=title, font=(FONT, 10), bg=COLOR_PANEL, fg=COLOR_TEXT, width=14, anchor="w"),
@@ -1465,6 +1472,15 @@ class SlackAlarmWindow(tk.Toplevel):
         self.app.close_window(self.key)
 
 
+def slack_detail(message):
+    return f"{message.author} · {slack_place(message)}"
+
+
+def zoom_detail(message):
+    place = t("slack_dm") if message.kind == "dm" else message.conversation
+    return f"{message.author} · {place}" + (f" · {t('slack_thread')}" if message.in_thread else "")
+
+
 def slack_place(message):
     """Where a message was posted: "Direct message", "#channel", "Group conversation", plus "in a thread"."""
     if message.kind == "dm":
@@ -1536,6 +1552,68 @@ class AlarmWindow(tk.Toplevel):
 
     def snooze(self):
         self.app.snooze_alarm(self.event)
+
+
+class DashboardWindow(Dialog):
+    """What a click on the icon shows: the state of everything watched, the next appointment and the
+    latest alerts, kept up to date while open."""
+
+    def __init__(self, app):
+        super().__init__(app, "dashboard", t("dashboard_title"))
+        self.body = tk.Frame(self.frame, bg="white")
+        self.body.pack(fill="both", expand=True)
+        button(self.footer, t("menu_agenda"), app.show_agenda).pack(side="left")
+        button(self.footer, t("menu_settings"), app.show_settings).pack(side="left", padx=(8, 0))
+        button(self.footer, t("sync_now"), app.fetcher_wake).pack(side="left", padx=(8, 0))
+        button(self.footer, t("close"), self.close, "primary").pack(side="right")
+        self.render()
+
+    def render(self):
+        if not self.winfo_exists():
+            return
+        for child in self.body.winfo_children():
+            child.destroy()
+        app = self.app
+        self.heading(t("section_state"))
+        for account in app.config["accounts"]:
+            problem = app.account_problem(account)
+            self.row("error" if problem else "ok", account_label(account), app.account_status(account))
+        if not app.config["accounts"]:
+            self.row("error", t("tab_agenda"), t("not_configured"))
+        for service, name in (("slack", "Slack"), ("zoom", "Zoom")):
+            self.row(app.messaging_health(service), name, t(f"slack_status_{app.messaging_state(service)}"))
+
+        self.heading(t("section_next"))
+        self.text(app.next_alert_text())
+
+        self.heading(t("section_history"))
+        if not app.history:
+            self.text(t("history_empty", time=f"{app.started:%H:%M}"))
+        for entry in list(app.history)[-DASHBOARD_ROWS:][::-1]:
+            when, source, detail, action = entry
+            line = tk.Frame(self.body, bg="white")
+            line.pack(fill="x", anchor="w", pady=1)
+            self.label(line, f"{when:%H:%M}", fg=COLOR_MUTED, width=6, anchor="w").pack(side="left")
+            self.label(line, source, font=(FONT, 10, "bold"), width=7, anchor="w").pack(side="left")
+            self.label(line, detail[:60], anchor="w").pack(side="left")
+            self.label(line, t(f"history_{action}", minutes=app.config["slack_delay_minutes"]), fg=COLOR_MUTED).pack(
+                side="right", padx=(12, 0)
+            )
+        self.after(DASHBOARD_REFRESH_MS, self.render)
+
+    def heading(self, title):
+        top = 0 if len(self.body.winfo_children()) == 0 else 14
+        self.label(self.body, title, font=(FONT, 10, "bold"), fg=COLOR_ACCENT).pack(anchor="w", pady=(top, 4))
+
+    def row(self, health, name, state):
+        line = tk.Frame(self.body, bg="white")
+        line.pack(fill="x", anchor="w", pady=1)
+        self.label(line, "●", fg=HEALTH_COLORS[health]).pack(side="left", padx=(0, 8))
+        self.label(line, name, width=28, anchor="w").pack(side="left")
+        self.label(line, state, fg=COLOR_MUTED, anchor="w").pack(side="left")
+
+    def text(self, value):
+        self.label(self.body, value, wraplength=self.wrap, justify="left").pack(anchor="w")
 
 
 class AgendaWindow(tk.Toplevel):
@@ -1745,6 +1823,8 @@ class App:
         self.zoom = None
         self.zoom_state = "off"
         self.zoom_retry_at = 0.0
+        # (time, source, detail, action) of the latest alerts, shown by the dashboard.
+        self.history = deque(maxlen=HISTORY_SIZE)
 
     # --- plumbing -------------------------------------------------------
 
@@ -1774,7 +1854,8 @@ class App:
             ),
             pystray.Menu.SEPARATOR,
             # Hidden: it gives a plain click on the icon its action, without a bold entry in the menu.
-            pystray.MenuItem("agenda", lambda: self.post(self.show_agenda), default=True, visible=False),
+            pystray.MenuItem("dashboard", lambda: self.post(self.show_dashboard), default=True, visible=False),
+            item("menu_dashboard", self.show_dashboard),
             item("menu_agenda", self.show_agenda),
             item("sync_now", self.fetcher_wake),
             item("test_alarm", self.test_alarm),
@@ -1920,9 +2001,11 @@ class App:
         """Called by the Slack connection, off the UI thread: quiet hours and "Do not disturb" silence everything."""
         if not hours_open(self.config, datetime.now()):
             log.info("slack: outside alert hours, message ignored")
+            self.post(partial(self.remember, "Slack", slack_detail(message), "quiet_hours"))
             return
         if self.config["slack_respect_dnd"] and self.slack is not None and self.slack.do_not_disturb():
             log.info("slack: do not disturb, message ignored")
+            self.post(partial(self.remember, "Slack", slack_detail(message), "dnd"))
             return
         self.post(partial(self.on_slack_message, message))
 
@@ -1936,6 +2019,7 @@ class App:
         log.info("slack: message (%s) -> %s", ", ".join(sorted(message.triggers)), "+".join(
             name for name, wanted in (("sound", sound), ("alarm", alarm)) if wanted
         ))
+        self.remember("Slack", slack_detail(message), "sound_wait" if sound and alarm else "sound" if sound else "wait")
         if sound and not self.sound_playing:
             play_once(self.config["slack_sound"])
         if not alarm:
@@ -1953,6 +2037,8 @@ class App:
             return
         self.vip_announced[message.author] = now
         log.info("VIP message announced")
+        source = "Zoom" if isinstance(message, zoom_alerts.ZoomMessage) else "Slack"
+        self.remember(source, message.author, "vip")
         # Over a ringing alarm, the voice alone: a new sound would stop the alarm's.
         phrase = vip_phrase(self.config) if self.config["slack_vip_voice"] else None
         announce(self.config["slack_vip_sound"], phrase, with_sound=not self.sound_playing)
@@ -1962,7 +2048,9 @@ class App:
         if group and now >= group["deadline"] and not self.slack_checking and self.slack is not None:
             self.slack_group = None
             self.slack_checking = True
-            self.background(partial(self.slack.unseen, group["messages"]), self.slack_checked)
+            self.background(
+                partial(self.slack.unseen, group["messages"]), partial(self.slack_checked, waited=group["messages"])
+            )
         # While a Slack alarm is shown, it closes by itself once everything has been read.
         if time.time() >= self.slack_recheck_at and self.slack is not None:
             self.slack_recheck_at = time.time() + 30
@@ -1972,8 +2060,12 @@ class App:
         if self.slack_state == "disconnected" and time.time() >= self.slack_retry_at:
             self.start_slack()
 
-    def slack_checked(self, unseen):
+    def slack_checked(self, unseen, waited=()):
         self.slack_checking = False
+        read = len(waited) - len(unseen)
+        if read:
+            log.info("slack: %d message(s) read in time", read)
+            self.remember("Slack", t("history_read_count", count=read), "read")
         if unseen:
             self.ring_slack(unseen)
 
@@ -1984,6 +2076,7 @@ class App:
 
     def ring_slack(self, messages):
         log.info("slack alarm: %d unread message(s)", len(messages))
+        self.remember("Slack", t("slack_unread_one") if len(messages) == 1 else t("slack_unread_many", count=len(messages)), "alarm")
         key = f"slack:{messages[0].ts}"
         self.windows[key] = SlackAlarmWindow(self, key, messages, len(self.windows))
         self.ringing_since = datetime.now().astimezone()
@@ -2061,6 +2154,7 @@ class App:
         """Called by the Zoom watcher, off the UI thread."""
         if not hours_open(self.config, datetime.now(), "zoom"):
             log.info("zoom: outside alert hours, message ignored")
+            self.post(partial(self.remember, "Zoom", zoom_detail(message), "quiet_hours"))
             return
         self.post(partial(self.on_zoom_message, message))
 
@@ -2071,6 +2165,7 @@ class App:
         if not any(self.config["zoom_actions"].get(trigger) == "sound" for trigger in message.triggers):
             return
         log.info("zoom: message (%s) -> sound", ", ".join(sorted(message.triggers)))
+        self.remember("Zoom", zoom_detail(message), "sound")
         if not self.sound_playing:
             play_once(self.config["zoom_sound"])
 
@@ -2163,6 +2258,15 @@ class App:
 
     def show_agenda(self):
         self.open("agenda", lambda: AgendaWindow(self))
+
+    def show_dashboard(self):
+        self.open("dashboard", lambda: DashboardWindow(self))
+
+    def remember(self, source, detail, action):
+        """Adds an alert to the dashboard's history (action: a history_* text)."""
+        self.history.append((datetime.now(), source, detail, action))
+        if "dashboard" in self.dialogs:
+            self.dialogs["dashboard"].render()
 
     def watched_calendars(self):
         """Names of the calendars being watched, in a stable order."""
@@ -2323,6 +2427,7 @@ class App:
 
     def ring(self, event):
         log.info("alarm: %s at %s", event.summary, event.start.isoformat())
+        self.remember(t("tab_agenda"), event.summary, "alarm")
         self.windows[event.key] = AlarmWindow(self, event, len(self.windows))
         self.ringing_since = datetime.now().astimezone()
         self.set_sound(True)
@@ -2330,6 +2435,7 @@ class App:
     def chime(self, event):
         """The "ring" mode: one sound and a Windows notification, no window to close."""
         log.info("ring: %s at %s", event.summary, event.start.isoformat())
+        self.remember(t("tab_agenda"), event.summary, "ring")
         if not self.sound_playing:
             if os.path.exists(self.config["sound"]):
                 play_once(self.config["sound"])
@@ -2426,6 +2532,17 @@ class App:
             return t("no_upcoming")
         first = min(upcoming, key=lambda event: event.start)
         return t("next_event", time=f"{first.start:%H:%M}", title=first.summary)[:80]
+
+    def next_alert_text(self):
+        """The next appointment that will ring, and when."""
+        now = datetime.now().astimezone()
+        upcoming = [event for event in ringable_events(self.events.values(), self.config) if not event.all_day and event.start > now]
+        if not upcoming:
+            return t("no_upcoming_alert")
+        first = min(upcoming, key=lambda event: event.start)
+        alert_at = max(now, first.start - timedelta(minutes=self.config["lead_minutes"]))
+        day = "" if first.start.date() == now.date() else f"{first.start:%d/%m} "
+        return t("next_alert", day=day, time=f"{first.start:%H:%M}", title=first.summary, alert=f"{alert_at:%H:%M}")
 
     def refresh_tray(self):
         self.tray.title = f"Vigie{' (dev)' if DEV else ''} — {self.status_text()}"[:120]

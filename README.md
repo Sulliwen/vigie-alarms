@@ -26,10 +26,14 @@ minute sonne dès qu'il est découvert.
    agenda à surveiller.
 
 Le programme s'inscrit lui-même au démarrage de Windows. Un **clic** sur
-l'icône de la zone de notification ouvre l'**Agenda** : tous les rendez-vous
-des 7 prochains jours, tous agendas confondus, regroupés par jour. Tout le
-reste passe par un **clic droit** sur cette icône : tester l'alarme,
-synchroniser d'autres agendas, ouvrir les paramètres, quitter. Le programme
+l'icône de la zone de notification ouvre le **Tableau de bord** : l'état de
+chaque agenda et de chaque messagerie (pastille verte, rouge ou grise), la
+prochaine alerte de rendez-vous, et les dernières alertes depuis le démarrage
+de Vigie (heure, source, message, ce qui a été fait : son, alarme, annonce VIP,
+lu à temps, ignoré hors horaires…). Ses boutons ouvrent l'**Agenda** (tous les
+rendez-vous des 7 prochains jours, regroupés par jour), les paramètres, ou
+relancent la synchronisation. Le reste passe par un **clic droit** sur cette
+icône : tester l'alarme, synchroniser d'autres agendas, quitter. Le programme
 existe en français et en anglais.
 
 ## Agendas pris en charge

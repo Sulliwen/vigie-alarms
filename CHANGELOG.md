@@ -43,6 +43,10 @@ Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
 - Paramètres : Slack, Zoom et les futures messageries regroupés dans un onglet
   « Messageries » (liste à gauche avec l'état de chaque outil) ; les personnes
   VIP y ont leur propre entrée, commune à toutes les messageries.
+- Tableau de bord au clic sur l'icône (à la place de l'Agenda) : état des
+  agendas et des messageries, prochaine alerte de rendez-vous, dernières
+  alertes avec ce qui a été fait, y compris les messages Slack lus avant le
+  délai et ceux ignorés hors horaires ou en « Ne pas déranger ».
 - Mode développement (`dev.ps1`) : lancement depuis le code, redémarrage
   automatique à chaque modification.
 

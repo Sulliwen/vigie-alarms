@@ -24,10 +24,13 @@ rings as soon as it is found.
    instructions shown. Repeat for every calendar to watch.
 
 The program registers itself to start with Windows. A **click** on the icon in
-the notification area opens the **Agenda**: every appointment of the next
-7 days, from all calendars, grouped by day. Everything else goes through a
-**right-click** on that icon: test the alarm,
-sync more calendars, open the settings, quit. The program exists in French and
+the notification area opens the **Dashboard**: the state of every calendar and
+messaging tool (green, red or grey dot), the next appointment alert, and the
+latest alerts since Vigie started (time, source, message, what was done: sound,
+alarm, VIP announcement, read in time, ignored outside hours…). Its buttons
+open the **Agenda** (every appointment of the next 7 days, grouped by day), the
+settings, or sync again. Everything else goes through a **right-click** on that
+icon: test the alarm, sync more calendars, quit. The program exists in French and
 in English.
 
 ## Supported calendars

@@ -706,12 +706,19 @@ class AppTest(unittest.TestCase):
         self.tick()
         self.assertEqual(list(self.app.windows), ["free"])
 
-    def test_clicking_the_icon_opens_the_agenda_without_a_bold_menu_entry(self):
+    def test_clicking_the_icon_opens_the_dashboard_without_a_bold_menu_entry(self):
         default = [entry for entry in self.app.build_menu().items if entry.default]
         self.assertEqual([entry.visible for entry in default], [False])
         default[0](None)
         self.app.inbox.get_nowait()()
-        self.assertIn("agenda", self.app.dialogs)
+        self.assertIn("dashboard", self.app.dialogs)
+
+    def ignored(self, action):
+        """The only thing posted for a silenced message: its line in the dashboard's history."""
+        self.app.inbox.get_nowait()()
+        self.assertTrue(self.app.inbox.empty())
+        self.assertEqual(self.app.history[-1][3], action)
+        self.assertFalse(self.app.windows)
 
     # --- slack
 
@@ -769,7 +776,7 @@ class AppTest(unittest.TestCase):
         self.connect_slack(unseen=lambda messages: messages)
         self.app.slack.do_not_disturb.return_value = True
         self.app.slack_received(self.slack_message("100.0"))
-        self.assertTrue(self.app.inbox.empty())
+        self.ignored("dnd")
 
     def test_open_slack_goes_to_the_conversation(self):
         self.connect_slack(unseen=lambda messages: messages)
@@ -811,7 +818,7 @@ class AppTest(unittest.TestCase):
         self.connect_slack(unseen=lambda messages: messages)
         self.app.config.update(slack_hours_only=True, slack_hours=[0, 0])
         self.app.slack_received(self.slack_message("100.0"))
-        self.assertTrue(self.app.inbox.empty())
+        self.ignored("quiet_hours")
 
     def test_do_not_disturb_can_be_ignored(self):
         self.connect_slack(unseen=lambda messages: messages)
@@ -929,7 +936,7 @@ class AppTest(unittest.TestCase):
     def test_zoom_stays_silent_outside_its_hours(self):
         self.app.config.update(zoom_hours_only=True, zoom_hours=[0, 0])
         self.app.zoom_received(self.zoom_message("dm"))
-        self.assertTrue(self.app.inbox.empty())
+        self.ignored("quiet_hours")
 
     def test_a_refused_zoom_authorization_asks_for_a_new_one(self):
         self.app.zoom = mock.Mock()
@@ -937,6 +944,29 @@ class AppTest(unittest.TestCase):
         self.app.zoom_state = "connected"
         self.app.zoom_tick()
         self.assertEqual((self.app.zoom, self.app.zoom_state), (None, "no_tokens"))
+
+    # --- dashboard
+
+    def test_dashboard_shows_the_state_the_next_alert_and_the_latest_alerts(self):
+        soon = event("soon", self.now + timedelta(hours=2))
+        self.app.on_events("a", [soon])
+        self.app.config["slack_vip_enabled"] = True
+        with mock.patch("vigie.play_once"), mock.patch("vigie.announce"):
+            self.app.on_slack_message(self.slack_message("100.0"))
+            self.app.on_zoom_message(zoom_alerts.ZoomMessage("m1", "Jakez", "channel", "dev", False, vip=True))
+        self.app.slack_checked([], waited=[self.slack_message("100.0")])
+        self.app.show_dashboard()
+        self.app.root.update()
+        shown = self.labels(self.app.dialogs["dashboard"].body)
+        self.assertIn("Slack", shown)
+        self.assertIn("désactivé", shown)
+        alert = (soon.start - timedelta(minutes=self.app.config["lead_minutes"])).strftime("%H:%M")
+        self.assertTrue(any(text.endswith(f"alerte à {alert}") for text in shown), shown)
+        for expected in ("Ana · Message privé", "son, alarme si non lu dans 5 min", "Jakez", "annonce VIP",
+                         "1 message(s) lu(s) avant le délai", "lu à temps, pas d'alarme"):
+            self.assertIn(expected, shown)
+        # The newest first.
+        self.assertLess(shown.index("1 message(s) lu(s) avant le délai"), shown.index("Ana · Message privé"))
 
     # --- agenda
 
