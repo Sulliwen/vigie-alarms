@@ -10,7 +10,7 @@ if (-not (Test-Path $pythonw)) {
 }
 
 Get-CimInstance Win32_Process |
-    Where-Object { $_.Name -eq 'Vigie.exe' -or ($_.Name -eq 'pythonw.exe' -and $_.CommandLine -like '*vigie.py*') } |
+    Where-Object { $_.Name -eq 'Vigie.exe' -or ($_.Name -in 'python.exe', 'pythonw.exe' -and $_.CommandLine -like '*vigie.py*') } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 

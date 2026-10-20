@@ -15,6 +15,8 @@ Il est repris par l'installeur et affiché en bas de la fenêtre « Paramètres 
 
 Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
 
+- Lancement au démarrage de Windows sans fenêtre de terminal, même après un
+  lancement manuel depuis un terminal.
 - Le portrait de Vigie remplace l'icône du calendrier : programme, fenêtres et
   zone de notification. Une pastille verte ou rouge dans le coin indique si les
   agendas se synchronisent.

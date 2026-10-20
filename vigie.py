@@ -331,7 +331,12 @@ def account_label(account):
 def launch_command():
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}"'
-    return f'"{sys.executable}" "{Path(__file__).resolve()}"' + (" --dev" if DEV else "")
+    # pythonw.exe even when started from a terminal with python.exe: no console window at logon.
+    interpreter = Path(sys.executable)
+    windowless = interpreter.with_name("pythonw.exe")
+    if interpreter.name.lower() == "python.exe" and windowless.exists():
+        interpreter = windowless
+    return f'"{interpreter}" "{Path(__file__).resolve()}"' + (" --dev" if DEV else "")
 
 
 def watch_sources(on_change, interval=1.0):

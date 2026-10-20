@@ -198,6 +198,19 @@ class DevModeTest(unittest.TestCase):
             self.assertEqual(self.watch([source], edit("x = (\n")), 0)
 
 
+class LaunchCommandTest(unittest.TestCase):
+    def test_logon_command_has_no_console_window_even_when_started_from_a_terminal(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            python, pythonw = Path(folder) / "python.exe", Path(folder) / "pythonw.exe"
+            python.touch()
+            pythonw.touch()
+            with mock.patch("vigie.sys.executable", str(python)), mock.patch("vigie.DEV", True):
+                command = vigie.launch_command()
+        self.assertTrue(command.startswith(f'"{pythonw}" '))
+        self.assertTrue(command.endswith(" --dev"))
+
+
 class SlackRulesTest(unittest.TestCase):
     me = "UME"
 
