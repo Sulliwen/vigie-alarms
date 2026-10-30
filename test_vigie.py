@@ -7,6 +7,7 @@ from unittest import mock
 
 import icalendar
 
+import mail_alerts
 import slack_alerts
 import texts
 import vigie
@@ -285,6 +286,145 @@ class SlackRulesTest(unittest.TestCase):
         self.assertEqual(watcher.unseen([read, unread, unknown]), [unread, unknown])
 
 
+class MailRulesTest(unittest.TestCase):
+    me = "me@x.test"
+
+    def test_every_new_message_matches_but_the_users_own(self):
+        self.assertEqual(mail_alerts.triggers_of("Ana", "ana@x.test", "Bonjour", self.me), {"all"})
+        self.assertEqual(mail_alerts.triggers_of("Me", self.me, "Note", self.me), frozenset())
+
+    def test_vip_by_name_in_any_order_or_by_address(self):
+        vip = ["Jakez Rolland", "boss@x.test"]
+        self.assertIn("vip", mail_alerts.triggers_of("Rolland Jakez", "j@x.test", "", self.me, vip))
+        self.assertIn("vip", mail_alerts.triggers_of("Le chef", "boss@x.test", "", self.me, vip))
+        self.assertNotIn("vip", mail_alerts.triggers_of("Jakez", "j@x.test", "", self.me, vip))
+
+    def test_keyword_is_a_whole_word_of_the_subject(self):
+        self.assertIn("keyword", mail_alerts.triggers_of("A", "a@x.test", "URGENT : prod", self.me, (), ["urgent"]))
+        self.assertNotIn("keyword", mail_alerts.triggers_of("A", "a@x.test", "urgente", self.me, (), ["urgent"]))
+
+    def test_reads_encoded_headers(self):
+        header = b"From: =?UTF-8?B?QW7DoQ==?= <Ana@X.test>\r\nSubject: =?UTF-8?Q?R=C3=A9union?=\r\n ce soir\r\n\r\n"
+        self.assertEqual(mail_alerts.read_headers(header), ("Aná", "ana@x.test", "Réunion ce soir"))
+
+    def test_a_badly_encoded_header_is_left_as_it_came(self):
+        self.assertEqual(mail_alerts.decoded("=?nope?B?QQ==?="), "=?nope?B?QQ==?=")
+
+    def test_parses_flags_placed_before_or_after_the_headers(self):
+        data = [
+            (b"1 (UID 7 FLAGS (\\Seen) BODY[HEADER.FIELDS (FROM)] {9}", b"From: A\r\n"),
+            b")",
+            (b"2 (UID 8 BODY[HEADER.FIELDS (FROM)] {9}", b"From: B\r\n"),
+            b" FLAGS ())",
+            b"3 (FLAGS (\\Seen))",
+            None,
+        ]
+        self.assertEqual(
+            mail_alerts.parse_fetch(data), [(7, "\\Seen", b"From: A\r\n"), (8, "", b"From: B\r\n")]
+        )
+
+
+class FakeImap:
+    """An inbox answering like an IMAP server; records the commands, to tell how it was opened."""
+
+    def __init__(self, messages=None, validity=1):
+        # {uid: (flags, header)}
+        self.messages = messages or {}
+        self.validity = validity
+        self.commands = []
+
+    def login(self, *_):
+        return "OK", []
+
+    def status(self, *_):
+        next_uid = max(self.messages, default=0) + 1
+        return "OK", [f'"INBOX" (UIDVALIDITY {self.validity} UIDNEXT {next_uid})'.encode()]
+
+    def select(self, mailbox, readonly=False):
+        self.commands.append(("select", mailbox, readonly))
+        return "OK", [b"1"]
+
+    def logout(self):
+        return "BYE", []
+
+    def uid(self, command, *args):
+        self.commands.append((command, *args))
+        if command == "SEARCH":
+            first = int(re.search(r"UID (\d+):", args[1]).group(1))
+            # "n:*" always answers the newest message.
+            uids = [uid for uid in self.messages if uid >= first] or sorted(self.messages)[-1:]
+            return "OK", [" ".join(map(str, uids)).encode()]
+        answer = []
+        for uid in args[0].split(","):
+            if int(uid) in self.messages:
+                flags, header = self.messages[int(uid)]
+                answer += [(f"1 (UID {uid} FLAGS ({flags}) BODY[] {{1}}".encode(), header), b")"]
+        return "OK", answer
+
+
+class MailWatcherTest(unittest.TestCase):
+    def watcher(self, inbox, **options):
+        self.received = []
+        watcher = mail_alerts.MailWatcher("host", "me@x.test", "pw", self.received.append, **options)
+        with mock.patch("mail_alerts.connect", return_value=inbox):
+            watcher.open()
+        return watcher
+
+    def test_the_existing_inbox_stays_silent_and_a_new_message_is_handed_on_once(self):
+        inbox = FakeImap({5: ("", b"From: Old <old@x.test>\r\n\r\n")})
+        watcher = self.watcher(inbox)
+        self.assertEqual(watcher.read_new(), [])
+        inbox.messages[6] = ("", b"From: Ana <ana@x.test>\r\nSubject: Hello\r\n\r\n")
+        message = watcher.read_new()[0]
+        self.assertEqual((message.uid, message.author, message.subject, message.vip), (6, "Ana", "Hello", False))
+        self.assertEqual(watcher.read_new(), [])
+
+    def test_never_marks_a_message_as_read(self):
+        inbox = FakeImap({1: ("", b"From: A <a@x.test>\r\n\r\n")})
+        watcher = self.watcher(inbox)
+        inbox.messages[2] = ("", b"From: B <b@x.test>\r\n\r\n")
+        watcher.read_new()
+        self.assertIn(("select", "INBOX", True), inbox.commands)
+        fetch = next(command for command in inbox.commands if command[0] == "FETCH")
+        self.assertIn("BODY.PEEK", fetch[2])
+
+    def test_a_message_read_elsewhere_or_sent_by_the_user_is_skipped(self):
+        inbox = FakeImap()
+        watcher = self.watcher(inbox)
+        inbox.messages[1] = ("\\Seen", b"From: A <a@x.test>\r\n\r\n")
+        inbox.messages[2] = ("", b"From: Me <ME@x.test>\r\n\r\n")
+        self.assertEqual(watcher.read_new(), [])
+
+    def test_a_new_validity_forgets_the_position(self):
+        inbox = FakeImap({9: ("", b"From: A <a@x.test>\r\n\r\n")})
+        watcher = self.watcher(inbox)
+        with mock.patch("mail_alerts.connect", return_value=FakeImap({2: ("", b"")}, validity=2)):
+            watcher.open()
+        self.assertEqual((watcher.validity, watcher.next_uid), (2, 3))
+
+    def test_a_reconnection_keeps_the_position(self):
+        inbox = FakeImap({1: ("", b"")})
+        watcher = self.watcher(inbox)
+        inbox.messages[2] = ("", b"From: A <a@x.test>\r\n\r\n")
+        with mock.patch("mail_alerts.connect", return_value=inbox):
+            watcher.open()
+        self.assertEqual([message.uid for message in watcher.read_new()], [2])
+
+    def test_unseen_keeps_only_what_is_still_unread_in_the_inbox(self):
+        inbox = FakeImap({1: ("\\Seen", b""), 2: ("", b"")})
+        watcher = self.watcher(inbox)
+        messages = [mail_alerts.MailMessage(uid, "A", "S") for uid in (1, 2, 3)]
+        self.assertEqual([message.uid for message in watcher.unseen(messages)], [2])
+
+    def test_when_the_server_cannot_tell_a_message_counts_as_unread(self):
+        watcher = self.watcher(FakeImap())
+        watcher.connection.uid = mock.Mock(side_effect=OSError("gone"))
+        messages = [mail_alerts.MailMessage(1, "A", "S")]
+        self.assertEqual(watcher.unseen(messages), messages)
+        watcher.connection = None
+        self.assertEqual(watcher.unseen(messages), messages)
+
+
 class ZoomRulesTest(unittest.TestCase):
     me = {"zid", "me@x.test", "mid"}
 
@@ -409,7 +549,7 @@ class ConfigTest(unittest.TestCase):
         ):
             vigie.forget()
         removed = {call.args[0] for call in keyring.delete_password.call_args_list}
-        self.assertEqual(removed, {"vigie:a1", "vigie:slack:app", "vigie:slack:user", "vigie:zoom"})
+        self.assertEqual(removed, {"vigie:a1", "vigie:slack:app", "vigie:slack:user", "vigie:zoom", "vigie:mail"})
 
     def test_default_accounts_are_not_shared_between_configurations(self):
         with mock.patch("vigie.load_json", return_value={}):
@@ -957,6 +1097,93 @@ class AppTest(unittest.TestCase):
         self.app.zoom_state = "connected"
         self.app.zoom_tick()
         self.assertEqual((self.app.zoom, self.app.zoom_state), (None, "no_tokens"))
+
+    # --- mail
+
+    def mail_message(self, *triggers):
+        return mail_alerts.MailMessage(1, "Ana", "Bonjour", vip="vip" in triggers, triggers=frozenset(triggers))
+
+    def test_mail_settings_are_saved(self):
+        self.app.show_settings()
+        dialog = self.app.dialogs["settings"]
+        dialog.mail_enabled.set(True)
+        dialog.mail_actions["keyword"].current(vigie.SLACK_ACTIONS.index("sound_alarm"))
+        dialog.mail_lists["keyword"].insert(0, "urgent, prod")
+        with (
+            mock.patch("vigie.autostart_command", return_value=None),
+            mock.patch.object(self.app, "start_slack"),
+            mock.patch.object(self.app, "start_zoom"),
+            mock.patch.object(self.app, "start_mail") as start_mail,
+        ):
+            dialog.submit()
+        start_mail.assert_called_once()
+        config = self.app.config
+        self.assertTrue(config["mail_enabled"])
+        self.assertEqual(config["mail_actions"], {"all": "sound", "vip": "alarm", "keyword": "sound_alarm"})
+        self.assertEqual(config["mail_keywords"], ["urgent", "prod"])
+        self.assertEqual((config["mail_delay_minutes"], config["mail_hours"]), (5, [8, 19]))
+
+    def test_an_ordinary_mail_names_its_sender_and_never_rings(self):
+        self.app.on_mail_message(self.mail_message("all"))
+        with mock.patch("vigie.announce") as announce:
+            self.app.mail_tick(self.now)
+            self.app.mail_tick(self.now)
+        announce.assert_called_once_with(self.app.config["mail_sound"], "Mail de Ana", with_sound=True)
+        self.app.tray.notify.assert_called_once_with("Bonjour", "Mail de Ana")
+        self.assertIsNone(self.app.mail_group)
+
+    def test_the_mails_of_one_round_share_one_announcement(self):
+        for author in ("Ana", "Ana", "bob.martin@x.test"):
+            self.app.on_mail_message(mail_alerts.MailMessage(1, author, "", triggers=frozenset({"all"})))
+        with mock.patch("vigie.announce") as announce:
+            self.app.mail_tick(self.now)
+        self.assertEqual(announce.call_args.args[1], "3 mails de Ana, bob martin")
+        self.assertEqual(self.app.tray.notify.call_args.args[0], "(sans objet)")
+
+    def test_a_mail_can_stay_a_plain_sound(self):
+        self.app.config["mail_say_sender"] = False
+        self.app.on_mail_message(self.mail_message("all"))
+        with mock.patch("vigie.announce") as announce:
+            self.app.mail_tick(self.now)
+        announce.assert_called_once_with(self.app.config["mail_sound"], None, with_sound=True)
+        self.app.tray.notify.assert_not_called()
+
+    def test_a_vip_mail_is_announced_without_the_mail_sound_and_waits_for_the_alarm(self):
+        self.app.config["slack_vip_enabled"] = True
+        with mock.patch("vigie.announce") as announce, mock.patch("vigie.play_once") as play_once:
+            self.app.on_mail_message(self.mail_message("all", "vip"))
+        announce.assert_called_once_with(self.app.config["slack_vip_sound"], "Message VIP, Mail de Ana", with_sound=True)
+        play_once.assert_not_called()
+        self.assertEqual(self.app.mail_to_announce, [])
+        self.assertEqual(len(self.app.mail_group["messages"]), 1)
+        self.assertEqual(self.app.history[0][1], "Mail")
+
+    def test_a_mail_read_in_time_does_not_ring(self):
+        self.app.mail_checked([], waited=[self.mail_message("all", "vip")])
+        self.assertFalse(self.app.windows)
+
+    def test_an_unread_vip_mail_rings_then_the_alarm_closes_once_read(self):
+        message = self.mail_message("all", "vip")
+        self.app.mail_checked([message], waited=[message])
+        window = self.app.windows["mail:1"]
+        self.assertIsInstance(window, vigie.MailAlarmWindow)
+        self.assertIn("1 mail non lu", self.labels(window))
+        self.assertIn("Bonjour", self.labels(window))
+        self.app.mail_rechecked("mail:1", [])
+        self.assertFalse(self.app.windows)
+
+    def test_mail_stays_silent_outside_its_hours(self):
+        self.app.config.update(mail_hours_only=True, mail_hours=[0, 0])
+        self.app.mail_received(self.mail_message("all"))
+        self.ignored("quiet_hours")
+
+    def test_a_refused_mail_account_asks_for_a_new_one(self):
+        self.app.mail = mock.Mock()
+        self.app.mail.thread.is_alive.return_value = False
+        self.app.mail_state = "connected"
+        self.app.mail_tick(self.now)
+        self.assertEqual((self.app.mail, self.app.mail_state), (None, "no_tokens"))
+        self.assertEqual(self.app.mail_status_text(), "compte à saisir")
 
     # --- dashboard
 

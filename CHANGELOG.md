@@ -15,6 +15,10 @@ Il est repris par l'installeur et affiché en bas de la fenêtre « Paramètres 
 
 Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
 
+- Alertes mail (IMAP, Infomaniak par défaut) : un son à chaque nouveau mail,
+  annonce des personnes VIP et alarme si leur mail reste non lu ; mots-clés dans
+  le sujet ; expéditeur annoncé par la voix et une notification ; entrée « Mail » dans Paramètres → Messageries. Vigie ne marque aucun
+  mail comme lu.
 - Lancement au démarrage de Windows sans fenêtre de terminal, même après un
   lancement manuel depuis un terminal.
 - Le portrait de Vigie remplace l'icône du calendrier : programme, fenêtres et

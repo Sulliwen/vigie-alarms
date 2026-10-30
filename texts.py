@@ -230,7 +230,7 @@ STRINGS = {
             "ou * pour tous. Zoom ne dit pas si un message a été lu : pas d'alarme, seulement un son, environ "
             "30 secondes après le message."
         ),
-        "vip_intro": "Valable pour toutes les messageries : Slack, Zoom.",
+        "vip_intro": "Valable pour toutes les messageries : Slack, Zoom, Mail.",
         "zoom_menu_status": "Zoom : {state}",
         "zoom_connect_title": "Connecter Zoom",
         "zoom_connect_help": (
@@ -244,6 +244,39 @@ STRINGS = {
         "zoom_waiting": "Autorisez l'application dans le navigateur (5 minutes au plus)…",
         "zoom_error": "Zoom refuse l'autorisation : {error}",
         "zoom_done_page": "Vigie est connectée à Zoom. Vous pouvez fermer cet onglet.",
+        # Mail
+        "tab_mail": "Mail",
+        "mail_enable": "Activer les alertes mail",
+        "mail_say_sender": "Annoncer l'expéditeur (voix et notification)",
+        "mail_from": "Mail de {name}",
+        "mail_from_many": "{count} mails de {names}",
+        "mail_no_subject": "(sans objet)",
+        "mail_account_button": "Compte mail…",
+        "mail_status_no_account": "compte à saisir",
+        "mail_trigger_all": "Tout nouveau mail",
+        "mail_trigger_vip": "Mail d'une personne VIP",
+        "mail_trigger_keyword": "Mots-clés dans le sujet",
+        "mail_triggers_hint": (
+            "Seule la boîte de réception est lue, environ 30 secondes après l'arrivée du mail, sans jamais marquer "
+            "un mail comme lu. Une personne VIP (reconnue à son nom ou à son adresse) est toujours annoncée par la "
+            "voix ; cette ligne dit seulement ce qui s'y ajoute."
+        ),
+        "mail_menu_status": "Mail : {state}",
+        "mail_account_title": "Compte mail",
+        "mail_account_help": (
+            "Votre adresse et votre mot de passe mail (IMAP). Si la double authentification est active sur votre "
+            "compte Infomaniak, créez un mot de passe d'application. Le mot de passe reste dans le Gestionnaire "
+            "d'identifications de Windows."
+        ),
+        "mail_host": "Serveur IMAP",
+        "mail_username": "Adresse",
+        "mail_password": "Mot de passe",
+        "mail_error_missing": "Saisissez le serveur, l'adresse et le mot de passe.",
+        "mail_error_refused": "Le serveur refuse cette adresse ou ce mot de passe.",
+        "mail_alarm_title": "Mail",
+        "mail_unread_one": "1 mail non lu",
+        "mail_unread_many": "{count} mails non lus",
+        "open_mail": "Ouvrir la messagerie",
         # Account states
         "synced_at": "Synchronisé à {time}",
         "failing": "En échec : {error}",
@@ -512,7 +545,7 @@ STRINGS = {
             "or * for all. Zoom does not tell whether a message was read: no alarm, only a sound, about 30 seconds "
             "after the message."
         ),
-        "vip_intro": "For every messaging tool: Slack, Zoom.",
+        "vip_intro": "For every messaging tool: Slack, Zoom, Mail.",
         "zoom_menu_status": "Zoom: {state}",
         "zoom_connect_title": "Connect Zoom",
         "zoom_connect_help": (
@@ -525,6 +558,38 @@ STRINGS = {
         "zoom_waiting": "Authorize the app in the browser (5 minutes at most)…",
         "zoom_error": "Zoom refuses the authorization: {error}",
         "zoom_done_page": "Vigie is connected to Zoom. You can close this tab.",
+        # Mail
+        "tab_mail": "Mail",
+        "mail_enable": "Turn mail alerts on",
+        "mail_say_sender": "Announce the sender (voice and notification)",
+        "mail_from": "Mail from {name}",
+        "mail_from_many": "{count} messages from {names}",
+        "mail_no_subject": "(no subject)",
+        "mail_account_button": "Mail account…",
+        "mail_status_no_account": "account to enter",
+        "mail_trigger_all": "Any new message",
+        "mail_trigger_vip": "Message from a VIP person",
+        "mail_trigger_keyword": "Keywords in the subject",
+        "mail_triggers_hint": (
+            "Only the inbox is read, about 30 seconds after a message arrives, and no message is ever marked as "
+            "read. A VIP person (recognised by name or address) is always announced by the voice; this row only "
+            "says what is added to it."
+        ),
+        "mail_menu_status": "Mail: {state}",
+        "mail_account_title": "Mail account",
+        "mail_account_help": (
+            "Your mail address and password (IMAP). If two-factor authentication is on for your Infomaniak account, "
+            "create an app password. The password stays in the Windows Credential Manager."
+        ),
+        "mail_host": "IMAP server",
+        "mail_username": "Address",
+        "mail_password": "Password",
+        "mail_error_missing": "Enter the server, the address and the password.",
+        "mail_error_refused": "The server refuses this address or password.",
+        "mail_alarm_title": "Mail",
+        "mail_unread_one": "1 unread message",
+        "mail_unread_many": "{count} unread messages",
+        "open_mail": "Open the mailbox",
         # Account states
         "synced_at": "Synced at {time}",
         "failing": "Failing: {error}",

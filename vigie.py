@@ -46,9 +46,11 @@ import recurring_ical_events
 from caldav.lib.error import AuthorizationError
 from PIL import Image, ImageDraw, ImageTk
 
+import mail_alerts
 import slack_alerts
 import texts
 import zoom_alerts
+from mail_alerts import MailWatcher
 from slack_alerts import SlackWatcher
 from zoom_alerts import ZoomWatcher
 from texts import PROVIDERS, t
@@ -60,7 +62,7 @@ __version__ = "1.0.0"
 APP = "vigie"
 # --dev: run from the sources and restart by itself whenever they change.
 DEV = "--dev" in sys.argv
-SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py", "slack_alerts.py", "zoom_alerts.py")]
+SOURCES = [Path(__file__).with_name(name) for name in ("vigie.py", "texts.py", "slack_alerts.py", "zoom_alerts.py", "mail_alerts.py")]
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
@@ -139,6 +141,25 @@ DEFAULT_CONFIG = {
     "zoom_hours_only": False,
     "zoom_hours": [8, 19],
     "zoom_weekdays_only": False,
+    # Mail (IMAP inbox): what each trigger does (SLACK_ACTIONS). VIP people are those of Slack; they are
+    # announced whatever their trigger does.
+    "mail_enabled": False,
+    "mail_host": mail_alerts.DEFAULT_HOST,
+    "mail_web_url": "https://mail.infomaniak.com",
+    "mail_actions": {
+        "all": "sound",
+        "vip": "alarm",
+        "keyword": "none",
+    },
+    "mail_keywords": [],
+    "mail_say_sender": True,
+    "mail_delay_minutes": 5,
+    "mail_sound": r"C:\Windows\Media\Windows Notify Email.wav",
+    "mail_alarm_sound": r"C:\Windows\Media\Alarm01.wav",
+    "mail_silence_after_minutes": 0,
+    "mail_hours_only": False,
+    "mail_hours": [8, 19],
+    "mail_weekdays_only": False,
     # An event found after it started still rings during this many minutes.
     "late_grace_minutes": 5,
     "poll_seconds": 60,
@@ -298,12 +319,35 @@ def delete_zoom_credentials():
             pass
 
 
+MAIL_SERVICE = f"{APP}:mail"
+
+
+def mail_credentials():
+    """(address, password), or None until the mail account has been entered."""
+    credentials = tuple(keyring.get_password(MAIL_SERVICE, name) for name in ("username", "password"))
+    return credentials if all(credentials) else None
+
+
+def set_mail_credentials(username, password):
+    keyring.set_password(MAIL_SERVICE, "username", username)
+    keyring.set_password(MAIL_SERVICE, "password", password)
+
+
+def delete_mail_credentials():
+    for name in ("username", "password"):
+        try:
+            keyring.delete_password(MAIL_SERVICE, name)
+        except keyring.errors.PasswordDeleteError:
+            pass
+
+
 def load_config():
     stored = load_json(CONFIG_PATH, {})
     config = {**copy.deepcopy(DEFAULT_CONFIG), **stored}
     # New triggers keep their default when an older file lists only some of them.
     config["slack_actions"] = {**DEFAULT_CONFIG["slack_actions"], **stored.get("slack_actions", {})}
     config["zoom_actions"] = {**DEFAULT_CONFIG["zoom_actions"], **stored.get("zoom_actions", {})}
+    config["mail_actions"] = {**DEFAULT_CONFIG["mail_actions"], **stored.get("mail_actions", {})}
     # Before the switch existed, listing names was enough to turn VIP announcements on.
     if "slack_vip_enabled" not in stored and stored.get("slack_vip_names"):
         config["slack_vip_enabled"] = True
@@ -458,7 +502,7 @@ def slack_action(actions, triggers):
 
 
 def hours_open(config, now, service="slack"):
-    """Whether Slack (or Zoom) may make a noise now, given its alert hours and days."""
+    """Whether Slack (or Zoom, or the mail) may make a noise now, given its alert hours and days."""
     if config[f"{service}_weekdays_only"] and now.weekday() >= 5:
         return False
     if not config[f"{service}_hours_only"]:
@@ -967,7 +1011,7 @@ class AccountsDialog(Dialog):
 
 
 class SettingsDialog(Dialog):
-    """Three tabs: General, Agenda (appointments only) and Messaging (Slack, Zoom and their VIP people)."""
+    """Three tabs: General, Agenda (appointments only) and Messaging (Slack, Zoom, the mail and their VIP people)."""
 
     def __init__(self, app):
         super().__init__(app, "settings", t("title_settings"), t("settings_intro"))
@@ -992,7 +1036,7 @@ class SettingsDialog(Dialog):
         self.next_row = 0
 
     def column(self, index):
-        """Starts a new column of settings in the current tab or pane (Slack and Zoom have two)."""
+        """Starts a new column of settings in the current tab or pane (Slack, Zoom and the mail have two)."""
         page = self.grid if index == 0 else self.columns
         if index == 0:
             self.columns = page
@@ -1050,6 +1094,7 @@ class SettingsDialog(Dialog):
         self.pane_items = {}
         self.build_slack(config)
         self.build_zoom(config)
+        self.build_mail(config)
         tk.Frame(self.menu, bg=COLOR_LINE, height=1).pack(fill="x", pady=8)
         self.build_vip(config)
         self.show_pane("slack")
@@ -1175,6 +1220,46 @@ class SettingsDialog(Dialog):
 
         self.section(t("section_slack_when"))
         self.zoom_hours = self.hours_rows(config, "zoom")
+
+    def build_mail(self, config):
+        self.pane("mail", t("tab_mail"), self.app.messaging_health("mail"))
+        self.column(0)
+        self.section(t("section_connection"))
+        status = tk.Frame(self.grid, bg="white")
+        self.label(status, self.app.mail_status_text(), fg=COLOR_MUTED).pack(side="left")
+        button(status, t("mail_account_button"), self.app.ask_mail_account, "link").pack(side="left", padx=(8, 0))
+        self.place(t("slack_status_label"), status)
+        self.mail_enabled = self.checkbox(t("mail_enable"), config["mail_enabled"])
+
+        self.section(t("section_slack_triggers"))
+        lists = {"keyword": config["mail_keywords"]}
+        self.mail_actions, self.mail_lists = self.trigger_table(
+            "mail", mail_alerts.TRIGGERS, SLACK_ACTIONS, config["mail_actions"], lists
+        )
+        self.hint(t("mail_triggers_hint"))
+
+        self.column(1)
+        self.section(t("section_slack_alarm"))
+        self.mail_delay = self.number(t("slack_delay_label"), config["mail_delay_minutes"], 1, 30, t("unit_minutes"))
+        self.mail_sounds, chosen = sound_choices(notification_sounds(), config["mail_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.mail_sound = self.choice(t("slack_sound_label"), list(self.mail_sounds), chosen, extras, width=25)
+        button(extras, t("sound_preview"), lambda: self.preview(self.mail_sounds[self.mail_sound.get()]), "link").pack(
+            side="left"
+        )
+        self.mail_alarm_sounds, chosen = sound_choices(alarm_sounds(), config["mail_alarm_sound"])
+        extras = tk.Frame(self.grid, bg="white")
+        self.mail_alarm_sound = self.choice(
+            t("slack_alarm_sound_label"), list(self.mail_alarm_sounds), chosen, extras, width=25
+        )
+        button(
+            extras, t("sound_preview"), lambda: self.preview(self.mail_alarm_sounds[self.mail_alarm_sound.get()]), "link"
+        ).pack(side="left")
+        self.mail_silence = self.silence_choice(config["mail_silence_after_minutes"], width=25)
+        self.mail_say_sender = self.checkbox(t("mail_say_sender"), config["mail_say_sender"])
+
+        self.section(t("section_slack_when"))
+        self.mail_hours = self.hours_rows(config, "mail")
 
     # --- building blocks: one setting per row of the grid
 
@@ -1361,6 +1446,15 @@ class SettingsDialog(Dialog):
             "zoom_channels": [name.lstrip("#") for name in names(self.zoom_lists["channel"])],
             "zoom_sound": self.zoom_sounds[self.zoom_sound.get()],
             **self.zoom_hours(),
+            "mail_enabled": self.mail_enabled.get(),
+            "mail_actions": {trigger: SLACK_ACTIONS[box.current()] for trigger, box in self.mail_actions.items()},
+            "mail_keywords": names(self.mail_lists["keyword"]),
+            "mail_delay_minutes": self.mail_delay(),
+            "mail_sound": self.mail_sounds[self.mail_sound.get()],
+            "mail_alarm_sound": self.mail_alarm_sounds[self.mail_alarm_sound.get()],
+            "mail_silence_after_minutes": SILENCE_CHOICES[self.mail_silence.current()],
+            "mail_say_sender": self.mail_say_sender.get(),
+            **self.mail_hours(),
         }
         autostart = self.autostart.get()
         self.close()
@@ -1426,15 +1520,54 @@ class ZoomConnectDialog(Dialog):
         self.app.save_zoom_credentials(client_id, self.refresh_token)
 
 
-class SlackAlarmWindow(tk.Toplevel):
+class MailAccountDialog(Dialog):
+    def __init__(self, app):
+        super().__init__(app, "mail", t("mail_account_title"), t("mail_account_help"))
+        grid = tk.Frame(self.frame, bg="white")
+        grid.pack(anchor="w")
+        saved = mail_credentials()
+        self.host = self.field(grid, 0, t("mail_host"), app.config["mail_host"])
+        self.username = self.field(grid, 1, t("mail_username"), saved[0] if saved else "")
+        self.password = self.field(grid, 2, t("mail_password"), "", show="•")
+        self.buttons(t("test_and_save"), self.submit)
+        self.bind("<Return>", lambda _: self.submit())
+        self.username.focus_set()
+
+    def submit(self):
+        fields = self.host.get().strip(), self.username.get().strip(), self.password.get()
+        if not all(fields):
+            self.status.config(text=t("mail_error_missing"), fg=COLOR_ERROR)
+            return
+        self.test(self.check, *fields)
+
+    def check(self, host, username, password):
+        try:
+            mail_alerts.check_account(host, username, password)
+        except mail_alerts.MailAuthError:
+            return t("mail_error_refused")
+        return None
+
+    def save(self, host, username, password):
+        self.app.save_mail_account(host, username, password)
+
+
+class UnreadAlarmWindow(tk.Toplevel):
     """One alarm for every message that concerns the user and is still unread."""
+
+    title_key = open_key = delay_setting = None
+
+    def headline(self, count):
+        raise NotImplementedError
+
+    def place_of(self, message):
+        raise NotImplementedError
 
     def __init__(self, app, key, messages, index):
         super().__init__(app.root)
         self.app = app
         self.key = key
         self.messages = messages
-        self.title(t("slack_alarm_title"))
+        self.title(t(self.title_key))
         self.configure(bg="white")
         self.resizable(False, False)
         self.attributes("-topmost", True)
@@ -1445,10 +1578,8 @@ class SlackAlarmWindow(tk.Toplevel):
         footer.pack(side="bottom", fill="x")
         frame = tk.Frame(self, bg="white", padx=26, pady=20)
         frame.pack(fill="both", expand=True)
-        count = len(messages)
-        headline = t("slack_unread_one") if count == 1 else t("slack_unread_many", count=count)
-        tk.Label(frame, text=headline, font=(FONT, 18, "bold"), bg="white", fg=COLOR_TEXT).pack(anchor="w")
-        minutes = app.config["slack_delay_minutes"]
+        tk.Label(frame, text=self.headline(len(messages)), font=(FONT, 18, "bold"), bg="white", fg=COLOR_TEXT).pack(anchor="w")
+        minutes = app.config[self.delay_setting]
         tk.Label(frame, text=t("slack_unread_since", minutes=minutes), font=(FONT, 10), bg="white", fg=COLOR_MUTED).pack(
             anchor="w", pady=(2, 12)
         )
@@ -1459,10 +1590,10 @@ class SlackAlarmWindow(tk.Toplevel):
             labels = tk.Frame(row, bg="white")
             labels.pack(side="left", padx=(10, 0), pady=3)
             tk.Label(labels, text=message.author, font=(FONT, 10, "bold"), bg="white", fg=COLOR_TEXT).pack(anchor="w")
-            tk.Label(labels, text=slack_place(message), font=(FONT, 9), bg="white", fg=COLOR_MUTED).pack(anchor="w")
+            tk.Label(labels, text=self.place_of(message), font=(FONT, 9), bg="white", fg=COLOR_MUTED).pack(anchor="w")
         # takefocus=0: a key typed elsewhere when the window pops up must not press a button.
         button(footer, t("stop"), self.stop, takefocus=0, width=14).pack(side="right")
-        button(footer, t("open_slack"), self.open, "primary", takefocus=0, width=14).pack(side="right", padx=(0, 10))
+        button(footer, t(self.open_key), self.open, "primary", takefocus=0, width=14).pack(side="right", padx=(0, 10))
 
         self.update_idletasks()
         x = (self.winfo_screenwidth() - self.winfo_width()) // 2 + 30 * index
@@ -1471,11 +1602,37 @@ class SlackAlarmWindow(tk.Toplevel):
         self.lift()
 
     def open(self):
-        self.app.open_slack(self.messages[0])
+        self.open_message()
         self.stop()
 
     def stop(self):
         self.app.close_window(self.key)
+
+
+class SlackAlarmWindow(UnreadAlarmWindow):
+    title_key, open_key, delay_setting = "slack_alarm_title", "open_slack", "slack_delay_minutes"
+
+    def headline(self, count):
+        return t("slack_unread_one") if count == 1 else t("slack_unread_many", count=count)
+
+    def place_of(self, message):
+        return slack_place(message)
+
+    def open_message(self):
+        self.app.open_slack(self.messages[0])
+
+
+class MailAlarmWindow(UnreadAlarmWindow):
+    title_key, open_key, delay_setting = "mail_alarm_title", "open_mail", "mail_delay_minutes"
+
+    def headline(self, count):
+        return t("mail_unread_one") if count == 1 else t("mail_unread_many", count=count)
+
+    def place_of(self, message):
+        return message.subject
+
+    def open_message(self):
+        self.app.open_mailbox()
 
 
 def slack_detail(message):
@@ -1485,6 +1642,22 @@ def slack_detail(message):
 def zoom_detail(message):
     place = t("slack_dm") if message.kind == "dm" else message.conversation
     return f"{message.author} · {place}" + (f" · {t('slack_thread')}" if message.in_thread else "")
+
+
+def mail_detail(message):
+    return f"{message.author} · {message.subject}"
+
+
+def spoken_sender(author):
+    """A sender as the voice should say it: an address without a name becomes its first part."""
+    name = author.split("@")[0].replace(".", " ") if "@" in author else author
+    return name[:60]
+
+
+def mail_announcement(authors):
+    """What is said for the mails of one round, each sender once."""
+    names = ", ".join(dict.fromkeys(spoken_sender(author) for author in authors))
+    return t("mail_from", name=names) if len(authors) == 1 else t("mail_from_many", count=len(authors), names=names)
 
 
 def slack_place(message):
@@ -1594,8 +1767,9 @@ class DashboardWindow(Dialog):
             self.row("error" if problem else "ok", account_label(account), app.account_status(account))
         if not app.config["accounts"]:
             self.row("error", t("tab_agenda"), t("not_configured"))
-        for service, name in (("slack", "Slack"), ("zoom", "Zoom")):
-            self.row(app.messaging_health(service), name, t(f"slack_status_{app.messaging_state(service)}"))
+        self.row(app.messaging_health("slack"), "Slack", app.slack_status_text())
+        self.row(app.messaging_health("zoom"), "Zoom", app.zoom_status_text())
+        self.row(app.messaging_health("mail"), "Mail", app.mail_status_text())
 
         self.heading(t("section_next"))
         self.text(app.next_alert_text())
@@ -1610,7 +1784,8 @@ class DashboardWindow(Dialog):
             self.label(line, f"{when:%H:%M}", fg=COLOR_MUTED, width=6, anchor="w").pack(side="left")
             self.label(line, source, font=(FONT, 10, "bold"), width=7, anchor="w").pack(side="left")
             self.label(line, detail[:60], anchor="w").pack(side="left")
-            self.label(line, t(f"history_{action}", minutes=app.config["slack_delay_minutes"]), fg=COLOR_MUTED).pack(
+            minutes = app.config["mail_delay_minutes" if source == "Mail" else "slack_delay_minutes"]
+            self.label(line, t(f"history_{action}", minutes=minutes), fg=COLOR_MUTED).pack(
                 side="right", padx=(12, 0)
             )
         self.after(DASHBOARD_REFRESH_MS, self.render)
@@ -1837,6 +2012,14 @@ class App:
         self.zoom = None
         self.zoom_state = "off"
         self.zoom_retry_at = 0.0
+        self.mail = None
+        self.mail_state = "off"
+        self.mail_group = None
+        # Senders waiting for the next tick: the mails of one round share one announcement.
+        self.mail_to_announce = []
+        self.mail_checking = False
+        self.mail_retry_at = 0.0
+        self.mail_recheck_at = 0.0
         # (time, source, detail, action) of the latest alerts, shown by the dashboard.
         self.history = deque(maxlen=HISTORY_SIZE)
 
@@ -1866,6 +2049,12 @@ class App:
                 enabled=False,
                 visible=lambda _: self.config["zoom_enabled"],
             ),
+            pystray.MenuItem(
+                lambda _: t("mail_menu_status", state=self.mail_status_text()),
+                None,
+                enabled=False,
+                visible=lambda _: self.config["mail_enabled"],
+            ),
             pystray.Menu.SEPARATOR,
             # Hidden: it gives a plain click on the icon its action, without a bold entry in the menu.
             pystray.MenuItem("dashboard", lambda: self.post(self.show_dashboard), default=True, visible=False),
@@ -1891,6 +2080,7 @@ class App:
             threading.Thread(target=watch_sources, args=(partial(self.post, self.restart),), daemon=True).start()
         self.start_slack()
         self.start_zoom()
+        self.start_mail()
         if not self.config["accounts"]:
             self.show_accounts()
         self.root.after(TICK_MS, self.tick)
@@ -1900,6 +2090,7 @@ class App:
         self.set_sound(False)
         self.stop_slack()
         self.stop_zoom()
+        self.stop_mail()
         self.tray.stop()
         self.root.destroy()
 
@@ -1940,6 +2131,9 @@ class App:
         self.start_zoom()
         if self.config["zoom_enabled"] and zoom_credentials() is None:
             self.ask_zoom_connection()
+        self.start_mail()
+        if self.config["mail_enabled"] and mail_credentials() is None:
+            self.ask_mail_account()
 
     # --- Slack ----------------------------------------------------------
 
@@ -2051,10 +2245,12 @@ class App:
             return
         self.vip_announced[message.author] = now
         log.info("VIP message announced")
-        source = "Zoom" if isinstance(message, zoom_alerts.ZoomMessage) else "Slack"
+        source = {zoom_alerts.ZoomMessage: "Zoom", mail_alerts.MailMessage: "Mail"}.get(type(message), "Slack")
         self.remember(source, message.author, "vip")
         # Over a ringing alarm, the voice alone: a new sound would stop the alarm's.
         phrase = vip_phrase(self.config) if self.config["slack_vip_voice"] else None
+        if source == "Mail" and self.config["mail_say_sender"]:
+            phrase = ", ".join(filter(None, (phrase, mail_announcement([message.author]))))
         announce(self.config["slack_vip_sound"], phrase, with_sound=not self.sound_playing)
 
     def slack_tick(self, now):
@@ -2201,6 +2397,158 @@ class App:
         log.info("zoom: connected by the user")
         self.save_config()
         self.start_zoom()
+
+    # --- mail -----------------------------------------------------------
+
+    def start_mail(self):
+        self.stop_mail()
+        if not self.config["mail_enabled"]:
+            self.mail_state = "off"
+            return
+        credentials = mail_credentials()
+        if credentials is None:
+            self.mail_state = "no_tokens"
+            return
+        config = self.config
+        watcher = MailWatcher(
+            config["mail_host"],
+            *credentials,
+            on_message=self.mail_received,
+            vip_names=config["slack_vip_names"] if config["slack_vip_enabled"] else (),
+            keywords=config["mail_keywords"],
+        )
+        self.mail_state = "connecting"
+
+        def connect():
+            try:
+                watcher.start()
+                return watcher, None
+            except mail_alerts.MailAuthError as exc:
+                return watcher, ("refused", exc)
+            except Exception as exc:
+                return watcher, ("network", exc)
+
+        self.background(connect, self.mail_started)
+
+    def mail_started(self, result):
+        watcher, error = result
+        if error is None:
+            self.mail, self.mail_state = watcher, "connected"
+        elif error[0] == "refused":
+            log.warning("mail: account refused (%s)", error[1])
+            self.mail_state = "no_tokens"
+        else:
+            log.warning("mail: cannot connect: %r", error[1])
+            self.mail_state = "disconnected"
+            self.mail_retry_at = time.time() + 60
+        self.refresh_tray()
+
+    def stop_mail(self):
+        if self.mail is not None:
+            self.mail.stop()
+            self.mail = None
+        # Messages waiting for the delay can no longer be checked; an alarm's window stays until closed.
+        self.mail_group = None
+
+    def mail_status_text(self):
+        state = self.messaging_state("mail")
+        return t("mail_status_no_account") if state == "no_tokens" else t(f"slack_status_{state}")
+
+    def mail_received(self, message):
+        """Called by the mail watcher, off the UI thread."""
+        if not hours_open(self.config, datetime.now(), "mail"):
+            log.info("mail: outside alert hours, message ignored")
+            self.post(partial(self.remember, "Mail", mail_detail(message), "quiet_hours"))
+            return
+        self.post(partial(self.on_mail_message, message))
+
+    def on_mail_message(self, message):
+        sound, alarm = slack_action(self.config["mail_actions"], message.triggers)
+        announced = message.vip and self.config["slack_vip_enabled"]
+        if self.config["mail_say_sender"] and (sound or announced):
+            self.tray.notify((message.subject or t("mail_no_subject"))[:250], t("mail_from", name=message.author)[:60])
+        if announced:
+            # The announcement has its own sound.
+            sound = False
+            self.announce_vip(message)
+        if not (sound or alarm):
+            return
+        log.info("mail: message (%s) -> %s", ", ".join(sorted(message.triggers)), "+".join(
+            name for name, wanted in (("sound", sound), ("alarm", alarm)) if wanted
+        ))
+        self.remember("Mail", mail_detail(message), "sound_wait" if sound and alarm else "sound" if sound else "wait")
+        if sound:
+            self.mail_to_announce.append(message.author)
+        if not alarm:
+            return
+        # The first unread message starts the delay; the next ones join it.
+        if self.mail_group is None:
+            deadline = datetime.now().astimezone() + timedelta(minutes=self.config["mail_delay_minutes"])
+            self.mail_group = {"deadline": deadline, "messages": []}
+        self.mail_group["messages"].append(message)
+
+    def mail_tick(self, now):
+        if self.mail_to_announce:
+            authors, self.mail_to_announce = self.mail_to_announce, []
+            phrase = mail_announcement(authors) if self.config["mail_say_sender"] else None
+            # Over a ringing alarm, the voice alone: a new sound would stop the alarm's.
+            announce(self.config["mail_sound"], phrase, with_sound=not self.sound_playing)
+        group = self.mail_group
+        if group and now >= group["deadline"] and not self.mail_checking and self.mail is not None:
+            self.mail_group = None
+            self.mail_checking = True
+            self.background(
+                partial(self.mail.unseen, group["messages"]), partial(self.mail_checked, waited=group["messages"])
+            )
+        # While a mail alarm is shown, it closes by itself once everything has been read.
+        if time.time() >= self.mail_recheck_at and self.mail is not None:
+            self.mail_recheck_at = time.time() + 30
+            for key, window in list(self.windows.items()):
+                if isinstance(window, MailAlarmWindow):
+                    self.background(partial(self.mail.unseen, window.messages), partial(self.mail_rechecked, key))
+        if self.mail_state == "disconnected" and time.time() >= self.mail_retry_at:
+            self.start_mail()
+        elif self.mail is not None and not self.mail.thread.is_alive():
+            # The watcher gives up when the server refuses the account: it has to be entered again.
+            self.stop_mail()
+            self.mail_state = "no_tokens"
+            self.refresh_tray()
+
+    def mail_checked(self, unseen, waited=()):
+        self.mail_checking = False
+        read = len(waited) - len(unseen)
+        if read:
+            log.info("mail: %d message(s) read in time", read)
+            self.remember("Mail", t("history_read_count", count=read), "read")
+        if unseen:
+            self.ring_mail(unseen)
+
+    def mail_rechecked(self, key, unseen):
+        if not unseen and key in self.windows:
+            log.info("mail: messages read, alarm closed")
+            self.close_window(key)
+
+    def ring_mail(self, messages):
+        log.info("mail alarm: %d unread message(s)", len(messages))
+        count = len(messages)
+        self.remember("Mail", t("mail_unread_one") if count == 1 else t("mail_unread_many", count=count), "alarm")
+        key = f"mail:{messages[0].uid}"
+        self.windows[key] = MailAlarmWindow(self, key, messages, len(self.windows))
+        self.ringing_since = datetime.now().astimezone()
+        self.set_sound(True, self.config["mail_alarm_sound"])
+
+    def open_mailbox(self):
+        os.startfile(self.config["mail_web_url"])
+
+    def ask_mail_account(self):
+        self.open("mail", lambda: MailAccountDialog(self))
+
+    def save_mail_account(self, host, username, password):
+        set_mail_credentials(username, password)
+        self.config.update(mail_host=host, mail_enabled=True)
+        log.info("mail: account saved")
+        self.save_config()
+        self.start_mail()
 
     # --- accounts -------------------------------------------------------
 
@@ -2422,10 +2770,15 @@ class App:
 
         self.slack_tick(now)
         self.zoom_tick()
+        self.mail_tick(now)
 
-        # The calendar's setting while an appointment rings, Slack's otherwise.
-        calendar_ringing = any(isinstance(window, AlarmWindow) for window in self.windows.values())
-        silence_after = self.config["silence_after_minutes" if calendar_ringing else "slack_silence_after_minutes"]
+        # The calendar's setting while an appointment rings, then Slack's, then the mail's.
+        ringing = [type(window) for window in self.windows.values()]
+        silence_after = self.config[
+            "silence_after_minutes" if AlarmWindow in ringing
+            else "slack_silence_after_minutes" if SlackAlarmWindow in ringing or MailAlarmWindow not in ringing
+            else "mail_silence_after_minutes"
+        ]
         if self.sound_playing and silence_after and now - self.ringing_since >= timedelta(minutes=silence_after):
             # Nobody is there: the windows stay, the noise stops.
             self.set_sound(False)
@@ -2612,6 +2965,7 @@ def forget():
         delete_secret(account)
     delete_slack_tokens()
     delete_zoom_credentials()
+    delete_mail_credentials()
 
 
 _instance_lock = None

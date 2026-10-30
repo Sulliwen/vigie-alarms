@@ -83,7 +83,7 @@ messages, edits and bots never trigger anything.
 - **When**: silent during Slack's “Do not disturb” (can be turned off), and if
   you wish only between two hours and only Monday to Friday.
 
-**VIP people** (Settings → Messaging → VIP people, shared by Slack and Zoom;
+**VIP people** (Settings → Messaging → VIP people, shared by Slack, Zoom and mail;
 unticked, no VIP treatment at all): all their messages are announced, wherever you are a member, even without
 a tag. A sound, then a voice says the chosen phrase (“VIP message” by default).
 They never trigger an alarm, and a series of messages is announced once a
@@ -152,6 +152,32 @@ In Vigie: Settings → Messaging → Zoom → “Connect Zoom…”, paste the *
 then authorize the app in the browser. The token is kept in the Windows
 Credential Manager and renewed on its own.
 
+## Mail alerts
+
+Vigie can also watch a mailbox over IMAP (Infomaniak by default):
+
+| Trigger | Default |
+| --- | --- |
+| Any new message | Sound |
+| Message from a VIP person (announced by the voice) | Alarm if unread |
+| Keywords in the subject (whole words) | Nothing |
+
+- **Sender announced**: a voice says “Mail from …” and a Windows notification
+  shows the sender and subject (can be turned off).
+- **Inbox only**, read every 30 seconds. Messages already there when Vigie starts
+  trigger nothing.
+- **No message is ever marked as read**: the mailbox is opened read-only. A
+  message already read elsewhere before it is detected, or sent by you, is skipped.
+- **Alarm if unread** after the chosen delay (5 minutes by default); it closes by
+  itself once the message is read or has left the inbox.
+- **VIP people**: the same list as for Slack and Zoom, recognised by name or
+  address.
+- **Hours** and alert days of its own.
+
+In Vigie: Settings → Messaging → Mail → “Mail account…”, enter the address and
+password (an app password if two-factor authentication is on). The password is
+kept in the Windows Credential Manager.
+
 ## Behaviour
 
 - The alarm loops until you click. Closing the window with the cross means
@@ -194,6 +220,7 @@ Right-click on the icon → “Settings…”:
   - **Slack**: connection, triggers, sound and alarm, hours (see
     [Slack alerts](#slack-alerts));
   - **Zoom**: connection, triggers, sound, hours (see [Zoom alerts](#zoom-alerts));
+  - **Mail**: account, triggers, sound and alarm, hours (see [Mail alerts](#mail-alerts));
   - **VIP people**, shared by every messaging tool.
 
 Settings are saved in `%LOCALAPPDATA%\vigie\config.json`. `my_emails`

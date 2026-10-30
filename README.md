@@ -88,8 +88,8 @@ jamais rien.
 - **Quand** : silence pendant le « Ne pas déranger » de Slack (désactivable), et
   au choix seulement entre deux heures et seulement du lundi au vendredi.
 
-**Personnes VIP** (Paramètres → Messageries → Personnes VIP, communes à Slack
-et Zoom ; décochée, aucun traitement VIP) : tous leurs messages sont annoncés, partout où vous êtes
+**Personnes VIP** (Paramètres → Messageries → Personnes VIP, communes à Slack,
+Zoom et au mail ; décochée, aucun traitement VIP) : tous leurs messages sont annoncés, partout où vous êtes
 membre, même sans tag. Un son, puis une voix dit la phrase choisie (« Message
 VIP » par défaut). Il n'y a jamais d'alarme pour eux, et une série de messages
 n'est annoncée qu'une fois par minute. Le nom est comparé sans tenir compte des
@@ -159,6 +159,33 @@ Dans Vigie : Paramètres → Messageries → Zoom → « Connecter Zoom… », y
 Client ID**, puis autoriser l'application dans le navigateur. Le jeton est
 conservé dans le Gestionnaire d'identifications Windows et renouvelé tout seul.
 
+## Alertes mail
+
+Vigie peut aussi surveiller une boîte mail en IMAP (Infomaniak par défaut) :
+
+| Déclencheur | Par défaut |
+| --- | --- |
+| Tout nouveau mail | Son |
+| Mail d'une personne VIP (annoncé par la voix) | Alarme si non lu |
+| Mots-clés dans le sujet (mots entiers) | Rien |
+
+- **Expéditeur annoncé** : une voix dit « Mail de … » et une notification Windows
+  montre l'expéditeur et le sujet (désactivable).
+- **Boîte de réception seulement**, relue toutes les 30 secondes. Les mails déjà
+  présents au lancement de Vigie ne déclenchent rien.
+- **Aucun mail n'est marqué comme lu** : la boîte est ouverte en lecture seule.
+  Un mail déjà lu ailleurs avant sa détection, ou envoyé par vous, est ignoré.
+- **Alarme si non lu** après le délai choisi (5 minutes par défaut) ; elle se
+  ferme seule une fois le mail lu ou sorti de la boîte de réception.
+- **Personnes VIP** : la même liste que pour Slack et Zoom, reconnues à leur nom
+  ou à leur adresse.
+- **Horaires** et jours d'alerte propres au mail.
+
+Dans Vigie : Paramètres → Messageries → Mail → « Compte mail… », y saisir
+l'adresse et le mot de passe (un mot de passe d'application si la double
+authentification est active). Le mot de passe est conservé dans le Gestionnaire
+d'identifications Windows.
+
 ## Comportement
 
 - Sonnerie en boucle jusqu'à un clic. Fermer la fenêtre par la croix vaut
@@ -203,6 +230,8 @@ Clic droit sur l'icône → « Paramètres… » :
     [Alertes Slack](#alertes-slack)) ;
   - **Zoom** : connexion, déclencheurs, son, horaires (voir
     [Alertes Zoom](#alertes-zoom)) ;
+  - **Mail** : compte, déclencheurs, son et alarme, horaires (voir
+    [Alertes mail](#alertes-mail)) ;
   - **Personnes VIP**, communes à toutes les messageries.
 
 Les réglages sont enregistrés dans `%LOCALAPPDATA%\vigie\config.json`.
