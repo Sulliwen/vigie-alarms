@@ -8,6 +8,7 @@ CalDAV accounts (Infomaniak, Nextcloud, iCloud...) and from iCal addresses
 
 import copy
 import ctypes
+import faulthandler
 import gzip
 import hashlib
 import json
@@ -18,6 +19,7 @@ import py_compile
 import queue
 import re
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -67,6 +69,10 @@ DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
 LOG_PATH = DATA_DIR / "vigie.log"
+# A crash of Python itself or of Tk leaves no trace in the log: faulthandler writes it here.
+CRASH_PATH = DATA_DIR / "crash.log"
+# Present while Vigie runs, removed by Quit: when it is still there, Vigie stopped without being quit.
+RUNNING_PATH = DATA_DIR / "running"
 
 INFOMANIAK_URL = "https://sync.infomaniak.com"
 DEFAULT_CONFIG = {
@@ -185,6 +191,9 @@ REDISCOVER_SECONDS = 1800
 TEST_PREFIX = "test:"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "Vigie"
+# Scheduled task that starts Vigie again when it stopped without being quit (crash, killed process).
+WATCHDOG_TASK = "Vigie Watchdog"  # at the root: creating a task folder needs admin rights
+WATCHDOG_MINUTES = 5
 COLOR_OK = "#2e7d32"
 COLOR_ERROR = "#c62828"
 FONT = "Segoe UI"
@@ -372,15 +381,21 @@ def account_label(account):
 # --- autostart --------------------------------------------------------------
 
 
-def launch_command():
+def launch_parts():
+    """The program and its arguments that start this copy of Vigie."""
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
+        return sys.executable, ""
     # pythonw.exe even when started from a terminal with python.exe: no console window at logon.
     interpreter = Path(sys.executable)
     windowless = interpreter.with_name("pythonw.exe")
     if interpreter.name.lower() == "python.exe" and windowless.exists():
         interpreter = windowless
-    return f'"{interpreter}" "{Path(__file__).resolve()}"' + (" --dev" if DEV else "")
+    return str(interpreter), f'"{Path(__file__).resolve()}"' + (" --dev" if DEV else "")
+
+
+def launch_command():
+    program, arguments = launch_parts()
+    return f'"{program}" {arguments}'.rstrip()
 
 
 def watch_sources(on_change, interval=1.0):
@@ -426,6 +441,74 @@ def set_autostart(enabled):
                 winreg.DeleteValue(key, RUN_NAME)
             except FileNotFoundError:
                 pass
+    # The watchdog follows the logon setting: someone who does not want Vigie at logon does not want it back either.
+    if enabled:
+        register_watchdog()
+    else:
+        delete_watchdog()
+
+
+def watchdog_task_xml():
+    """Every WATCHDOG_MINUTES and at each unlock, starts Vigie with --watchdog (see main()).
+    Also on battery, with no time limit: the process the task starts is Vigie itself."""
+    program, arguments = launch_parts()
+
+    def escape(text):
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+    start = datetime.now().replace(second=0, microsecond=0).isoformat()
+    # Without a named user, the unlock trigger (any user's session) needs admin rights.
+    user = escape(f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}".lstrip("\\"))
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Vigie: starts the alarm again if it stopped without being quit.</Description></RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>{start}</StartBoundary>
+      <Repetition><Interval>PT{WATCHDOG_MINUTES}M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+    <SessionStateChangeTrigger><StateChange>SessionUnlock</StateChange><UserId>{user}</UserId><Enabled>true</Enabled></SessionStateChangeTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec><Command>{escape(program)}</Command><Arguments>{escape((arguments + " --watchdog").strip())}</Arguments></Exec>
+  </Actions>
+</Task>
+"""
+
+
+def schtasks(*arguments):
+    return subprocess.run(["schtasks", *arguments], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+
+
+def register_watchdog():
+    """(Re)creates the watchdog task for this copy of Vigie. Failing only costs the restart after a crash."""
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "watchdog.xml"
+            path.write_text(watchdog_task_xml(), encoding="utf-16")
+            result = schtasks("/Create", "/TN", WATCHDOG_TASK, "/XML", str(path), "/F")
+        if result.returncode:
+            log.warning("watchdog: cannot register the task: %s", (result.stderr or result.stdout).strip())
+    except OSError as exc:
+        log.warning("watchdog: cannot register the task: %r", exc)
+
+
+def delete_watchdog():
+    try:
+        schtasks("/Delete", "/TN", WATCHDOG_TASK, "/F")
+    except OSError:
+        pass
 
 
 # --- reading calendars ------------------------------------------------------
@@ -2074,6 +2157,9 @@ class App:
         registered = autostart_command()
         if registered != launch_command() and (registered is not None or not CONFIG_PATH.exists()):
             set_autostart(True)
+        elif registered is not None:
+            # Also brings existing installations under the watchdog, without slowing the start.
+            threading.Thread(target=register_watchdog, daemon=True).start()
         self.tray.run_detached()
         self.fetcher.start()
         if DEV:
@@ -2086,7 +2172,10 @@ class App:
         self.root.after(TICK_MS, self.tick)
         self.root.mainloop()
 
-    def quit(self):
+    def quit(self, handing_over=False):
+        if not handing_over:  # by then the marker belongs to the new process
+            # Quit on purpose: the watchdog must not start Vigie again.
+            RUNNING_PATH.unlink(missing_ok=True)
         self.set_sound(False)
         self.stop_slack()
         self.stop_zoom()
@@ -2098,8 +2187,11 @@ class App:
         """--dev: hands over to a fresh process running the modified sources."""
         log.info("dev: sources changed, restarting")
         release_single_instance()
-        subprocess.Popen([sys.executable, *sys.argv], cwd=Path(__file__).parent)
-        self.quit()
+        # Not a stop without Quit: the new process writes the marker again.
+        RUNNING_PATH.unlink(missing_ok=True)
+        arguments = [argument for argument in sys.argv if argument != "--watchdog"]
+        subprocess.Popen([sys.executable, *arguments], cwd=Path(__file__).parent)
+        self.quit(handing_over=True)
 
     def fetcher_wake(self):
         self.fetcher.wake.set()
@@ -2944,6 +3036,23 @@ def setup_logging():
     threading.excepthook = lambda args: log_uncaught(args.exc_type, args.exc_value, args.exc_traceback)
 
 
+_crash_file = None
+
+
+def enable_crash_log():
+    """faulthandler writes the Python stack of every thread when the process itself crashes."""
+    global _crash_file
+    try:
+        if CRASH_PATH.exists() and CRASH_PATH.stat().st_size > 200_000:
+            CRASH_PATH.unlink()
+        _crash_file = open(CRASH_PATH, "a", encoding="utf-8")
+        _crash_file.write(f"--- {datetime.now():%Y-%m-%d %H:%M:%S} start {__version__}{' (dev)' if DEV else ''}, pid {os.getpid()}\n")
+        _crash_file.flush()
+        faulthandler.enable(_crash_file, all_threads=True)
+    except OSError as exc:
+        log.warning("cannot open the crash log: %r", exc)
+
+
 def check():
     """--check: reads every account once, without any window. Returns 0 when all of them answer."""
     app = types.SimpleNamespace(config=load_config(), post=lambda action: None)
@@ -2966,6 +3075,7 @@ def forget():
     delete_slack_tokens()
     delete_zoom_credentials()
     delete_mail_credentials()
+    delete_watchdog()
 
 
 _instance_lock = None
@@ -2983,10 +3093,21 @@ def main():
     if "--check" in sys.argv:
         sys.exit(check())
     # The handle is kept for the lifetime of the process: only one instance may run.
+    watchdog = "--watchdog" in sys.argv
     _instance_lock = ctypes.windll.kernel32.CreateMutexW(None, False, f"Local\\{APP}")
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        log.info("already running, exiting")
+        if not watchdog:  # every WATCHDOG_MINUTES: not worth a line in the log
+            log.info("already running, exiting")
         return
+    stopped_without_quit = RUNNING_PATH.exists()
+    if watchdog:
+        if not stopped_without_quit:  # quit on purpose
+            return
+        log.warning("watchdog: Vigie had stopped without being quit, starting it again (see crash.log)")
+    elif stopped_without_quit:
+        log.info("the previous run ended without Quit (crash, killed, or Windows shut down)")
+    RUNNING_PATH.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    enable_crash_log()
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):

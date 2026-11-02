@@ -15,6 +15,10 @@ Il est repris par l'installeur et affiché en bas de la fenêtre « Paramètres 
 
 Le numéro reste 1.0.0 tant que la version finale n'est pas validée.
 
+- Gardien : une tâche planifiée « Vigie Watchdog » (toutes les 5 minutes et à
+  chaque déverrouillage) relance Vigie si elle s'est arrêtée sans « Quitter » ;
+  elle suit le réglage de lancement au démarrage. Un plantage de Python ou de Tk
+  est écrit dans `crash.log`, à côté du journal.
 - Alertes mail (IMAP, Infomaniak par défaut) : un son à chaque nouveau mail,
   annonce des personnes VIP et alarme si leur mail reste non lu ; mots-clés dans
   le sujet ; expéditeur annoncé par la voix et une notification ; entrée « Mail » dans Paramètres → Messageries. Vigie ne marque aucun

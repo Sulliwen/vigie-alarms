@@ -212,6 +212,34 @@ class LaunchCommandTest(unittest.TestCase):
         self.assertTrue(command.endswith(" --dev"))
 
 
+class WatchdogTest(unittest.TestCase):
+    def test_task_restarts_this_copy_with_watchdog_on_battery_and_without_time_limit(self):
+        import xml.etree.ElementTree as ET
+        with mock.patch("vigie.launch_parts", return_value=(r"C:\A & B\pythonw.exe", '"C:\\v\\vigie.py" --dev')):
+            xml = vigie.watchdog_task_xml()
+        ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+        root = ET.fromstring(xml.split("?>", 1)[1])
+        self.assertEqual(root.find(".//t:Exec/t:Command", ns).text, r"C:\A & B\pythonw.exe")
+        self.assertEqual(root.find(".//t:Exec/t:Arguments", ns).text, '"C:\\v\\vigie.py" --dev --watchdog')
+        self.assertEqual(root.find(".//t:Repetition/t:Interval", ns).text, f"PT{vigie.WATCHDOG_MINUTES}M")
+        self.assertEqual(root.find(".//t:DisallowStartIfOnBatteries", ns).text, "false")
+        self.assertEqual(root.find(".//t:ExecutionTimeLimit", ns).text, "PT0S")
+        self.assertIsNotNone(root.find(".//t:SessionStateChangeTrigger", ns))
+        # Without it, Windows refuses the unlock trigger to a non-admin user.
+        self.assertTrue(root.find(".//t:SessionStateChangeTrigger/t:UserId", ns).text.endswith("\\" + vigie.os.environ["USERNAME"]))
+
+    def test_autostart_switches_the_watchdog_with_it(self):
+        with mock.patch("vigie.winreg"), mock.patch("vigie.register_watchdog") as register, mock.patch("vigie.delete_watchdog") as delete:
+            vigie.set_autostart(True)
+            register.assert_called_once_with()
+            vigie.set_autostart(False)
+            delete.assert_called_once_with()
+
+    def test_launch_command_is_unchanged_by_the_split(self):
+        with mock.patch("vigie.launch_parts", return_value=(r"C:\x\Vigie.exe", "")):
+            self.assertEqual(vigie.launch_command(), '"C:\\x\\Vigie.exe"')
+
+
 class SlackRulesTest(unittest.TestCase):
     me = "UME"
 
